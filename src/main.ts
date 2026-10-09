@@ -278,14 +278,27 @@ async function main() {
   type CameraFraming = { pitch: number; distance: number; yawOffset: number };
   type Autopilot = {
     body: Body;
-    speed: number;
-    /** Which way to go, in math coordinates.  undefined means we've arrived. */
-    steer(): Complex | undefined;
+    /** Move the body for one frame.  Returns its speed in world units per second, or undefined when it's done. */
+    step(dt: number): number | undefined;
     onDone?: () => void;
     /** Demos move the camera somewhere with a better view. */
     framing?: CameraFraming;
   };
   let autopilot: Autopilot | undefined;
+
+  /**
+   * Turn toward a direction (in math coordinates) and walk.
+   * Returns the speed in world units per second.
+   */
+  function walkToward(body: Body, direction: Complex, topSpeed: number, dt: number) {
+    const target = headingToward(direction.re, -direction.im);
+    body.heading = turnToward(body.heading, target, 3.5 * dt);
+    // Turn in place first if we're facing the wrong way.
+    const error = Math.abs(wrapAngle(target - body.heading));
+    const speed = topSpeed * Math.max(0, Math.cos(error)) ** 2;
+    moveBody(body, Math.sin(body.heading) * speed * dt, Math.cos(body.heading) * speed * dt);
+    return speed;
+  }
 
   /**
    * Walk counterclockwise around a circle.  It starts wherever the body is now.
@@ -301,11 +314,11 @@ async function main() {
     let swept = 0;
     // Take about 14 seconds no matter how big the circle looks.
     const circumference = Math.PI * 2 * radius * view.scale;
+    const speed = THREE.MathUtils.clamp(circumference / 14, 6, 60);
     return {
       body,
-      speed: THREE.MathUtils.clamp(circumference / 14, 6, 60),
       framing: { pitch: 0.75, distance: 24, yawOffset: 1.15 },
-      steer() {
+      step(dt) {
         const relative = sub(body.z, center);
         const angle = arg(relative);
         swept += wrapAngle(angle - lastAngle);
@@ -316,7 +329,95 @@ async function main() {
         const r = abs(relative);
         const out = normalize(relative);
         const error = (r - radius) / radius;
-        return { re: -out.im - out.re * error * 4, im: out.re - out.im * error * 4 };
+        const direction = { re: -out.im - out.re * error * 4, im: out.re - out.im * error * 4 };
+        return walkToward(body, direction, speed, dt);
+      },
+      onDone,
+    };
+  }
+
+  /**
+   * A growing spiral, centered where the body starts.  The end of each loop lands on the line
+   * from the start through the branch point:
+   *   1. half way from the start to the cones,
+   *   2. just short of the cones,
+   *   3. just past the forbidden zone, on the far side of the branch point,
+   *   4. the same distance further out again.
+   * The first two loops miss the branch point and the last two go around it.
+   *
+   * This follows the path exactly, rather than steering, so those landmarks come out right.
+   */
+  function spiralAutopilot(body: Body, onDone: () => void): Autopilot {
+    const scale = view.scale;
+    const center = body.z;
+    const startDistance = abs(center);
+    /** Just outside the cones, in math units. */
+    const margin = (BLOCK_RADIUS + 0.4) / scale;
+    // Unit vectors toward the branch point, and 90° counterclockwise from that.
+    const u = normalize(negate(center));
+    const v = { re: -u.im, im: u.re };
+    // Distance from the center at the end of each loop.
+    const radii = [
+      0,
+      Math.max(0, (startDistance - margin) / 2),
+      Math.max(0, startDistance - margin),
+      startDistance + margin,
+      startDistance + 3 * margin,
+    ];
+    const lastTheta = Math.PI * 2 * (radii.length - 1);
+    /** Radius and its derivative, as a function of the angle around the center. */
+    function radius(theta: number) {
+      const loop = Math.min(radii.length - 2, Math.floor(theta / (Math.PI * 2)));
+      const growth = (radii[loop + 1] - radii[loop]) / (Math.PI * 2);
+      return { r: radii[loop] + growth * (theta - Math.PI * 2 * loop), growth };
+    }
+    function position(theta: number): Complex {
+      const { r } = radius(theta);
+      const c = Math.cos(theta);
+      const s = Math.sin(theta);
+      return {
+        re: center.re + r * (c * u.re + s * v.re),
+        im: center.im + r * (c * u.im + s * v.im),
+      };
+    }
+    function tangent(theta: number): Complex {
+      const { r, growth } = radius(theta);
+      const c = Math.cos(theta);
+      const s = Math.sin(theta);
+      return {
+        re: growth * (c * u.re + s * v.re) + r * (-s * u.re + c * v.re),
+        im: growth * (c * u.im + s * v.im) + r * (-s * u.im + c * v.im),
+      };
+    }
+    // Pick a speed so the whole thing takes about 36 seconds.
+    let length = 0;
+    for (let i = 0; i < radii.length - 1; i++) {
+      length += Math.PI * (radii[i] + radii[i + 1]) * scale;
+    }
+    const topSpeed = THREE.MathUtils.clamp(length / 36, 6, 200);
+    const framing = { pitch: 0.85, distance: 20, yawOffset: 1.2 };
+    let theta = 0;
+    return {
+      body,
+      framing,
+      step(dt) {
+        if (theta >= lastTheta) {
+          return undefined;
+        }
+        const r = radius(theta).r * view.scale;
+        // Slow down in the tight curls near the middle.
+        const speed = topSpeed * THREE.MathUtils.clamp(r / 3, 0.3, 1);
+        const worldPerRadian = Math.max(0.5, abs(tangent(theta)) * view.scale);
+        theta = Math.min(lastTheta, theta + (speed * dt) / worldPerRadian);
+        // Aim at the point on the path, not just the next step, so we can't drift off of it.
+        const here = toWorld(body.z);
+        const there = toWorld(position(theta));
+        moveBody(body, there.x - here.x, there.z - here.z);
+        const direction = tangent(theta);
+        body.heading = turnToward(body.heading, headingToward(direction.re, -direction.im), 10 * dt);
+        // Back the camera up as the spiral grows.
+        framing.distance = THREE.MathUtils.clamp(18 + r * 0.9, 20, 55);
+        return speed;
       },
       onDone,
     };
@@ -325,42 +426,38 @@ async function main() {
   /** Walk to a point.  If the branch point is in the way, walk around it the short way. */
   function gotoAutopilot(body: Body, target: Complex): Autopilot {
     let side = 0;
+    function steer(): Complex | undefined {
+      const toTarget = sub(target, body.z);
+      if (abs(toTarget) * view.scale < 0.25) {
+        return undefined;
+      }
+      const blockRadius = (BLOCK_RADIUS - 0.1) / view.scale;
+      if (!segmentNearOrigin(body.z, target, blockRadius)) {
+        return toTarget;
+      }
+      if (side == 0) {
+        side = body.z.re * target.im - body.z.im * target.re >= 0 ? 1 : -1;
+      }
+      const out = normalize(body.z);
+      return { re: -out.im * side + out.re * 0.3, im: out.re * side + out.im * 0.3 };
+    }
     return {
       body,
-      speed: WALK_SPEED * 1.4,
-      steer() {
-        const toTarget = sub(target, body.z);
-        if (abs(toTarget) * view.scale < 0.25) {
-          return undefined;
-        }
-        const blockRadius = (BLOCK_RADIUS - 0.1) / view.scale;
-        if (!segmentNearOrigin(body.z, target, blockRadius)) {
-          return toTarget;
-        }
-        if (side == 0) {
-          side = body.z.re * target.im - body.z.im * target.re >= 0 ? 1 : -1;
-        }
-        const out = normalize(body.z);
-        return { re: -out.im * side + out.re * 0.3, im: out.re * side + out.im * 0.3 };
+      step(dt) {
+        const direction = steer();
+        return direction && walkToward(body, direction, WALK_SPEED * 1.4, dt);
       },
     };
   }
 
   function stepAutopilot(dt: number) {
     const pilot = autopilot!;
-    const direction = pilot.steer();
-    if (!direction) {
+    const speed = pilot.step(dt);
+    if (speed === undefined) {
       autopilot = undefined;
       pilot.onDone?.();
       return 0;
     }
-    const body = pilot.body;
-    const target = headingToward(direction.re, -direction.im);
-    body.heading = turnToward(body.heading, target, 3.5 * dt);
-    // Turn in place first if we're facing the wrong way.
-    const error = Math.abs(wrapAngle(target - body.heading));
-    const speed = pilot.speed * Math.max(0, Math.cos(error)) ** 2;
-    moveBody(body, Math.sin(body.heading) * speed * dt, Math.cos(body.heading) * speed * dt);
     return speed;
   }
 
@@ -392,6 +489,16 @@ async function main() {
       )
     );
   }
+  function demoSpiral() {
+    setMode("walk");
+    clearTrails();
+    autopilot = spiralAutopilot(player, () =>
+      toast(
+        "The first two loops were too small to go around the branch point, so each square root just traced a little spiral of its own. Once the loops were big enough to go around it, each lap carried the roots half way around.",
+        11000
+      )
+    );
+  }
   function demoCamera() {
     setMode("explore");
     sheetCheckbox.checked = true;
@@ -407,6 +514,7 @@ async function main() {
   }
   getById("demoCircle").addEventListener("click", demoCircle);
   getById("demoMiss").addEventListener("click", demoMiss);
+  getById("demoSpiral").addEventListener("click", demoSpiral);
   getById("demoCamera").addEventListener("click", demoCamera);
 
   //
@@ -827,6 +935,7 @@ async function main() {
     setMode,
     demoCircle,
     demoMiss,
+    demoSpiral,
     demoCamera,
     zoomBy,
   };
