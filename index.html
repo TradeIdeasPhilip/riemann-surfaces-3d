@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>√z Walkabout</title>
+    <link
+      rel="icon"
+      href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🌀</text></svg>"
+    />
+  </head>
+  <body>
+    <canvas id="scene"></canvas>
+
+    <div id="panel" class="glass">
+      <h1>√z Walkabout</h1>
+      <div class="row mode">
+        <button id="walkMode" class="active" title="Shortcut: C">🚶 Move z</button>
+        <button id="exploreMode" title="Shortcut: C">👁 Move camera only</button>
+      </div>
+      <div class="label">Demos</div>
+      <button id="demoCircle" class="demo">Walk z around the branch point</button>
+      <button id="demoMiss" class="demo">Walk a loop that misses it</button>
+      <button id="demoCamera" class="demo">Walk the camera around it</button>
+      <div class="label">Show</div>
+      <label><input type="checkbox" id="sheetColors" /> Floor colored by √z (camera's sheet)</label>
+      <label><input type="checkbox" id="ghost" /> Fade the root on the other sheet</label>
+      <div class="row">
+        <button id="clearTrails">Clear trails</button>
+        <button id="reset">Reset</button>
+      </div>
+    </div>
+
+    <div id="readout" class="glass"></div>
+
+    <div id="help" class="glass">
+      <span><kbd>W</kbd><kbd>S</kbd> or <kbd>↑</kbd><kbd>↓</kbd> walk</span>
+      <span><kbd>A</kbd><kbd>D</kbd> or <kbd>←</kbd><kbd>→</kbd> turn</span>
+      <span><kbd>Q</kbd><kbd>E</kbd> sidestep</span>
+      <span><kbd>Shift</kbd> run</span>
+      <span><b>Click</b> the floor to walk there</span>
+      <span><b>Drag</b> to look around</span>
+      <span><b>Scroll</b> / pinch to zoom the plane</span>
+      <span><kbd>C</kbd> move z ⇄ move camera</span>
+    </div>
+
+    <div id="toast"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
