@@ -72,7 +72,9 @@ class Nameplate {
     context.fillStyle = this.color;
     context.fillText(this.title, canvas.width / 2, 45);
     if (value) {
-      context.font = "500 46px system-ui, sans-serif";
+      // Roboto's digits are all the same width, so the text doesn't jiggle as the numbers change.
+      // Main waits for this font to load before creating any nameplates.
+      context.font = "500 46px Roboto, system-ui, sans-serif";
       context.lineWidth = 8;
       context.strokeText(value, canvas.width / 2, 115);
       context.fillStyle = "#e8eefc";

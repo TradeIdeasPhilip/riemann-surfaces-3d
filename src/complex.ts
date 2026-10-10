@@ -40,9 +40,12 @@ export function sqrtNear(z: Complex, previous: Complex): Complex {
   return dot(w, previous) >= 0 ? w : negate(w);
 }
 
-/** Like "3.00 − 1.25i".  Uses a real minus sign. */
+/** The imaginary unit, as written in this program. */
+export const I = "𝒾";
+
+/** Like "3.00 − 1.25𝒾".  Uses a real minus sign. */
 export function format(z: Complex, digits = 2) {
   const re = (z.re < 0 ? "−" : "") + Math.abs(z.re).toFixed(digits);
-  const im = Math.abs(z.im).toFixed(digits) + "i";
+  const im = Math.abs(z.im).toFixed(digits) + I;
   return `${re} ${z.im < 0 ? "−" : "+"} ${im}`;
 }

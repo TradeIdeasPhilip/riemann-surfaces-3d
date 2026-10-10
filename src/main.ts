@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import "@fontsource/roboto/latin-500.css";
 import "./style.css";
 import { BranchPoint } from "./branchPoint";
 import { Character, FloatingEye, loadCharacterModel } from "./characters";
@@ -14,7 +15,7 @@ import {
   type Complex,
 } from "./complex";
 import { Floor } from "./floor";
-import { Trail } from "./trail";
+import { OFF_SHEET_OPACITY, Trail } from "./trail";
 import {
   BLOCK_RADIUS,
   BLUE_COLOR,
@@ -129,7 +130,11 @@ async function main() {
   const branchPoint = new BranchPoint();
   scene.add(branchPoint.group);
 
-  await loadCharacterModel("models/RobotExpressive.glb");
+  // The nameplates draw with Roboto on a canvas, which won't wait for the font by itself.
+  await Promise.all([
+    loadCharacterModel("models/RobotExpressive.glb"),
+    document.fonts.load("500 46px Roboto").catch(() => undefined),
+  ]);
 
   const zCharacter = new Character(Z_COLOR, "z");
   const redCharacter = new Character(RED_COLOR, "√z");
@@ -138,7 +143,7 @@ async function main() {
   eyeMarker.root.visible = false;
   scene.add(zCharacter.root, redCharacter.root, blueCharacter.root, eyeMarker.root);
 
-  const zTrail = new Trail(Z_COLOR, 0.34, 0.02);
+  const zTrail = new Trail(Z_COLOR, 0.34, 0.02, true);
   const redTrail = new Trail(RED_COLOR, 0.28, 0.025);
   const blueTrail = new Trail(BLUE_COLOR, 0.28, 0.03);
   const trails = [zTrail, redTrail, blueTrail];
@@ -203,8 +208,9 @@ async function main() {
   const walkButton = getById<HTMLButtonElement>("walkMode");
   const exploreButton = getById<HTMLButtonElement>("exploreMode");
   const sheetCheckbox = getById<HTMLInputElement>("sheetColors");
-  const ghostCheckbox = getById<HTMLInputElement>("ghost");
   const liftSlider = getById<HTMLInputElement>("lift");
+  /** Hide the floating eye when a demo puts it somewhere it would just be in the way. */
+  let eyeHidden = false;
   const readout = getById("readout");
 
   function setMode(newMode: "walk" | "explore") {
@@ -222,7 +228,7 @@ async function main() {
     cameraRig.yawOffset = 0;
     cameraRig.pull = 0.2;
     mode = newMode;
-    eyeMarker.root.visible = mode == "explore";
+    eyeHidden = false;
     walkButton.classList.toggle("active", mode == "walk");
     exploreButton.classList.toggle("active", mode == "explore");
   }
@@ -352,8 +358,10 @@ async function main() {
    * The first two loops miss the branch point and the last two go around it.
    *
    * This follows the path exactly, rather than steering, so those landmarks come out right.
+   *
+   * If moveCamera is true, the camera rises and backs away as the spiral grows.
    */
-  function spiralAutopilot(body: Body, onDone: () => void): Autopilot {
+  function spiralAutopilot(body: Body, onDone: () => void, moveCamera = true): Autopilot {
     const scale = view.scale;
     const center = body.z;
     const startDistance = abs(center);
@@ -405,7 +413,7 @@ async function main() {
     let theta = 0;
     return {
       body,
-      framing,
+      framing: moveCamera ? framing : undefined,
       step(dt) {
         if (theta >= lastTheta) {
           return undefined;
@@ -508,20 +516,63 @@ async function main() {
   function demoCamera() {
     setMode("explore");
     sheetCheckbox.checked = true;
-    ghostCheckbox.checked = true;
     const radius = Math.max(abs(eye.z), (BLOCK_RADIUS + 2) / view.scale);
     autopilot = circleAutopilot(eye, complex(0, 0), radius, () => {
-      const which = redOnCameraSheet() ? "red" : "blue";
       toast(
-        `Only the camera moved, but it went around the branch point, so now it's on the other sheet. The floor's colors flipped, and from here √z means the ${which} one.`,
-        11000
+        zOnCameraSheet()
+          ? "Only the camera moved, and it went around the branch point, so it switched sheets. That put it back on z's sheet: z is solid again, and the floor's colors are back where they started."
+          : "Only the camera moved, but it went around the branch point, so now it's on the other sheet. The floor's colors flipped, and z faded out because it's not on this sheet. The square roots never fade: they live on an ordinary plane. Go around again to get back.",
+        12000
       );
     });
+  }
+  /**
+   * The same spiral, but the camera stands still, off to one side, where it can see everything.
+   * Each time z crosses the cut, directly behind the cloud, it switches to the other sheet from
+   * the camera and fades.  The next time it comes back.
+   */
+  function demoSpiralStillCamera() {
+    setMode("explore");
+    clearTrails();
+    sheetCheckbox.checked = true;
+    const start = player.z;
+    const startDistance = abs(start) * view.scale;
+    // The camera looks at a point half way between z and the branch point.  Sliding straight
+    // toward the branch point doesn't change sheets, so the camera starts on z's sheet.
+    const fraction = THREE.MathUtils.clamp((BLOCK_RADIUS + 0.5) / startDistance, 0.5, 1);
+    eye.z = { re: start.re * fraction, im: start.im * fraction };
+    eye.w = sqrtNear(eye.z, player.w);
+    // Look from 45° clockwise of straight out.  That puts the cut, directly behind the cloud,
+    // away from the spiral's landmarks, which are all on the line through z and the branch point.
+    // The camera looks the opposite way, toward the branch point and 45° counterclockwise.
+    const out = normalize(start);
+    const lookDirection = {
+      re: -(out.re + out.im) * Math.SQRT1_2,
+      im: -(out.im - out.re) * Math.SQRT1_2,
+    };
+    eye.heading = headingToward(lookDirection.re, -lookDirection.im);
+    eyeHidden = true;
+    // Back up far enough to see the whole spiral.
+    const outerRadius = startDistance + 3 * (BLOCK_RADIUS + 0.4);
+    cameraRig.yawOffset = 0;
+    cameraRig.pitch = 0.8;
+    cameraRig.distance = THREE.MathUtils.clamp(outerRadius * 2.2, 25, 150);
+    cameraRig.pull = 1;
+    autopilot = spiralAutopilot(
+      player,
+      () =>
+        toast(
+          "The camera never moved. The small loops stayed in front of the cloud, so z stayed on the camera's sheet. The first big loop took z behind the cloud, across the cut, onto the other sheet, so it faded. The next big loop brought it back. The square roots never fade: they live on an ordinary plane.",
+          14000
+        ),
+      false
+    );
   }
   getById("demoCircle").addEventListener("click", demoCircle);
   getById("demoMiss").addEventListener("click", demoMiss);
   getById("demoSpiral").addEventListener("click", demoSpiral);
   getById("demoCamera").addEventListener("click", demoCamera);
+  getById("demoSpiralStill").addEventListener("click", demoSpiralStillCamera);
 
   //
   // Keyboard
@@ -733,7 +784,12 @@ async function main() {
     return normalize(sqrtNear(cameraZ, activeBody().w));
   }
   let sheetDirection = cameraSheetDirection();
-  function redOnCameraSheet() {
+  /**
+   * z lives on the Riemann surface.  player.w (the red root) says where:  it's continued along
+   * z's path.  The camera's sheet agrees with z if its value of √z here is the same as player.w.
+   * The square roots live on an ordinary plane, so they're always visible.
+   */
+  function zOnCameraSheet() {
     return dot(player.w, sheetDirection) >= 0;
   }
 
@@ -801,7 +857,6 @@ async function main() {
       `<span class="chip" style="background:#${color.toString(16).padStart(6, "0")}"></span>`;
     const red = player.w;
     const blue = negate(player.w);
-    const sheetColor = redOnCameraSheet() ? RED_COLOR : BLUE_COLOR;
     const { major } = gridSpacing(view.scale);
     readout.innerHTML = `
       <table>
@@ -810,7 +865,7 @@ async function main() {
         <tr><td>${chip(BLUE_COLOR)}√z</td><td>${format(blue)}</td></tr>
       </table>
       <div class="small">
-        Camera's sheet: here √z = ${chip(sheetColor)}${sheetColor == RED_COLOR ? "red" : "blue"}<br>
+        ${zOnCameraSheet() ? "z is on the camera's sheet" : "z is on the other sheet, so it's faded"}<br>
         Grid lines every ${+major.toPrecision(6)} · zone radius ${(BLOCK_RADIUS / view.scale).toPrecision(3)}
         ${mode == "explore" ? "<br>Moving the camera only. z stays put." : ""}
       </div>`;
@@ -832,10 +887,10 @@ async function main() {
   window.addEventListener("resize", resize);
   resize();
 
-  function maybeAddToTrail(trail: Trail, z: Complex) {
+  function maybeAddToTrail(trail: Trail, z: Complex, w?: Complex) {
     const last = trail.last;
     if (!last || abs(sub(z, last)) * view.scale > 0.12) {
-      trail.add(z);
+      trail.add(z, w);
     }
   }
 
@@ -861,7 +916,10 @@ async function main() {
     const manual = input.forward != 0 || input.turn != 0 || input.strafe != 0;
     if (manual) {
       autopilot = undefined;
+      eyeHidden = false;
     }
+    // Usually whoever you're controlling, but a demo can move z while the camera stands still.
+    const moving = autopilot?.body ?? body;
     let speed = 0;
     let blocked = false;
     if (autopilot) {
@@ -915,7 +973,7 @@ async function main() {
     // Characters
     toWorld(player.z, 0, zCharacter.root.position);
     zCharacter.heading = player.heading;
-    zCharacter.animate(dt, mode == "walk" ? speed : 0);
+    zCharacter.animate(dt, moving == player ? speed : 0);
     zCharacter.nameplate.setValue(format(player.z));
 
     toWorld(red, 0, redCharacter.root.position);
@@ -930,8 +988,9 @@ async function main() {
     toWorld(eye.z, 0, eyeMarker.root.position);
     eyeMarker.heading = eye.heading;
     eyeMarker.animate(time);
+    eyeMarker.root.visible = mode == "explore" && !eyeHidden;
 
-    maybeAddToTrail(zTrail, player.z);
+    maybeAddToTrail(zTrail, player.z, player.w);
     maybeAddToTrail(redTrail, red);
     maybeAddToTrail(blueTrail, blue);
     for (const trail of trails) {
@@ -957,10 +1016,8 @@ async function main() {
     standOnFloor(eyeMarker.root, eyeMarker.shadow);
     clickRing.position.y = floorHeight(clickRing.position.x, clickRing.position.z) + 0.04;
 
-    const redHere = redOnCameraSheet();
-    const faded = 0.22;
-    redCharacter.setOpacity(ghostCheckbox.checked && !redHere ? faded : 1);
-    blueCharacter.setOpacity(ghostCheckbox.checked && redHere ? faded : 1);
+    // z fades when it's on the other sheet from the camera.  The square roots never fade.
+    zCharacter.setOpacity(zOnCameraSheet() ? 1 : OFF_SHEET_OPACITY);
 
     branchPoint.update(dt, time, floorHeight);
     updateReadout();
@@ -989,6 +1046,8 @@ async function main() {
     demoMiss,
     demoSpiral,
     demoCamera,
+    demoSpiralStillCamera,
+    zOnCameraSheet,
     zoomBy,
   };
 }

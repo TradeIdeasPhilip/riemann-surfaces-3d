@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { I } from "./complex";
 import {
   floorHeight,
   floorUniforms,
@@ -224,8 +225,7 @@ export class Floor {
         }
         const text = value.toFixed(decimals).replace("-", "−");
         items.push({ text, x: world, z: 0, title: false });
-        const imaginary =
-          Math.abs(value) == 1 ? (sign < 0 ? "−i" : "i") : text + "i";
+        const imaginary = Math.abs(value) == 1 ? (sign < 0 ? "−" : "") + I : text + I;
         items.push({ text: imaginary, x: 0, z: -world, title: false });
       }
     }

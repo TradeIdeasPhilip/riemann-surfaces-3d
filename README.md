@@ -42,6 +42,12 @@ npm run dev
   the camera is on the same sheet. The optional rainbow floor shows the branch of √z that agrees with
   the camera. Its cut is directly behind the cloud. Walk the camera once around the branch point and you're
   on the other sheet.
+- **Who fades.** z lives on the Riemann surface; the square roots live on an ordinary plane. So the roots
+  are always solid, and z (and the parts of its trail) fade when they're on the other sheet from the camera.
+  That happens when the camera, or z, goes around the branch point an odd number of times. The switch
+  always happens directly behind the cloud, so you never see it happen.
+- Numbers over the robots use Roboto (bundled from `@fontsource/roboto`) because its digits are all the
+  same width, so the labels don't jiggle as the numbers change.
 - **Rainbow floor.** Nine solid wedges ([myRainbow](https://github.com/TradeIdeasPhilip/canvas-recorder/blob/master/src/glib/my-rainbow.ts)),
   by the angle of √z. All nine go around once per turn of √z, which is two turns of z, so each sheet
   shows half the rainbow.
