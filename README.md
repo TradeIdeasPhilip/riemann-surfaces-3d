@@ -28,6 +28,16 @@ npm run dev
 | C or Tab | switch between moving z and moving only the camera |
 | Esc | stop a demo |
 
+## Functions
+
+- **√z**: two sheets.  The two square roots trade places each time z goes around the branch point.
+- **log z**: infinitely many sheets, stacked like a parking garage.  We draw 5 of the values: z's own
+  (red), and 2π𝒾 and 4π𝒾 above and below it.  With the 3D floor on, the floor is the spiral ramp, and the
+  levels above the camera's are drawn see-through near the branch point.
+
+Each function is one object in `src/functions.ts`.  Everything else (the floor, the camera's sheet, which
+things fade) works through that interface, using the "total angle" around the branch point.
+
 ## How it works
 
 - `src/world.ts` maps math coordinates to world coordinates. The branch point is always at the world origin.

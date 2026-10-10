@@ -79,6 +79,21 @@ h1 {
   flex: 1;
 }
 
+.demos {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.demos[hidden] {
+  display: none;
+}
+
+.row.function > button {
+  font-size: 15px;
+  font-weight: 600;
+}
+
 button {
   font: inherit;
   color: var(--text);

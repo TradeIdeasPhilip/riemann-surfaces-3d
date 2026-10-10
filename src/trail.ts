@@ -11,31 +11,46 @@ import {
 
 const MAX_POINTS = 20000;
 
-/** How solid z and its trail look when they're on the other sheet from the camera. */
+/** How solid z looks when it's on the other sheet from the camera. */
 export const OFF_SHEET_OPACITY = 0.25;
+/** The trail is thinner than z, so it needs a little more to stay visible. */
+const OFF_SHEET_TRAIL_OPACITY = 0.4;
 
 type TrailPoint = { z: Complex; w?: Complex };
 
 const vertexShader = /* glsl */ `
 ${floorHeightGlsl}
 attribute float across;
-/** √z at this point, continued along the path.  This says which sheet the point is on. */
+/** From the middle of the ribbon out to this edge, at the trail's normal width. */
+attribute vec2 side;
+/** The function's value at this point, continued along the path.  This says which sheet it's on. */
 attribute vec2 lift;
 uniform float uFadeOffSheet;
+uniform float uWidth;
 varying vec3 vWorld;
 varying float vAcross;
 varying float vOnSheet;
 void main() {
   vec4 world = modelMatrix * vec4(position, 1.0);
+  // Never let the trail get thinner than a few pixels, so it's still visible from far away.
+  float grow = max(1.0, 0.005 * distance(cameraPosition, world.xyz) / uWidth);
+  world.xz += side * grow;
   vOnSheet = 1.0;
+  // Usually ride on top of the 3D floor.
+  float height = floorHeight(world.xz);
   if (uFadeOffSheet > 0.5) {
     // Is this part of the path on the camera's sheet?
-    vec2 here = csqrt(vec2(world.x, -world.z));
-    if (dot(here, uSheetDir) < 0.0) here = -here;
-    vOnSheet = dot(here, lift) >= 0.0 ? 1.0 : 0.0;
+    float cameraTotal = uCameraTotal + cameraRelativeAngle(world.xz);
+    if (uFunction < 0.5) {
+      // √:  Is it the same square root as the camera's, or the other one?
+      vOnSheet = cos(atan(lift.y, lift.x) - cameraTotal * 0.5) >= 0.0 ? 1.0 : 0.0;
+    } else {
+      // log:  How many levels away is it?  And put it at its own height on the spiral.
+      vOnSheet = abs(lift.y - cameraTotal) < F_PI ? 1.0 : 0.0;
+      height = uLift * (lift.y - uFocusTotal);
+    }
   }
-  // Ride on top of the 3D floor.
-  world.y += floorHeight(world.xz);
+  world.y += height;
   vWorld = world.xyz;
   vAcross = across;
   gl_Position = projectionMatrix * viewMatrix * world;
@@ -57,7 +72,7 @@ void main() {
   vec3 color = mix(vec3(0.03, 0.04, 0.07), uColor, inside);
   float dist = distance(vWorld, cameraPosition);
   float fog = 1.0 - exp(-uFogDensity * uFogDensity * dist * dist);
-  gl_FragColor = vec4(mix(color, uFogColor, fog), vOnSheet > 0.5 ? 1.0 : ${OFF_SHEET_OPACITY.toFixed(3)});
+  gl_FragColor = vec4(mix(color, uFogColor, fog), vOnSheet > 0.5 ? 1.0 : ${OFF_SHEET_TRAIL_OPACITY.toFixed(3)});
 }
 `;
 
@@ -70,6 +85,8 @@ export class Trail {
   private points: TrailPoint[] = [];
   private readonly positions = new Float32Array(MAX_POINTS * 2 * 3);
   private readonly attribute: THREE.BufferAttribute;
+  private readonly sides = new Float32Array(MAX_POINTS * 2 * 2);
+  private readonly sideAttribute: THREE.BufferAttribute;
   private readonly lifts = new Float32Array(MAX_POINTS * 2 * 2);
   private readonly liftAttribute: THREE.BufferAttribute;
   private readonly geometry = new THREE.BufferGeometry();
@@ -104,8 +121,11 @@ export class Trail {
     this.attribute.setUsage(THREE.DynamicDrawUsage);
     this.liftAttribute = new THREE.BufferAttribute(this.lifts, 2);
     this.liftAttribute.setUsage(THREE.DynamicDrawUsage);
+    this.sideAttribute = new THREE.BufferAttribute(this.sides, 2);
+    this.sideAttribute.setUsage(THREE.DynamicDrawUsage);
     this.geometry.setAttribute("position", this.attribute);
     this.geometry.setAttribute("across", new THREE.BufferAttribute(across, 1));
+    this.geometry.setAttribute("side", this.sideAttribute);
     this.geometry.setAttribute("lift", this.liftAttribute);
     this.geometry.setIndex(new THREE.BufferAttribute(index, 1));
     this.geometry.setDrawRange(0, 0);
@@ -118,6 +138,7 @@ export class Trail {
           ...floorUniforms,
           uColor: { value: shaderColor(color) },
           uFadeOffSheet: { value: fadeOffSheet ? 1 : 0 },
+          uWidth: { value: width },
           uFogColor: { value: shaderColor(SKY_COLOR) },
           uFogDensity: { value: FOG_DENSITY },
         },
@@ -183,7 +204,9 @@ export class Trail {
       const { z: point, w } = points[i];
       const x = point.re * scale;
       const z = -point.im * scale;
-      p.set([x + nx * half, 0, z + nz * half, x - nx * half, 0, z - nz * half], i * 6);
+      // Both edges start at the middle.  The shader moves them out, so it can widen far away trails.
+      p.set([x, 0, z, x, 0, z], i * 6);
+      this.sides.set([nx * half, nz * half, -nx * half, -nz * half], i * 4);
       if (w) {
         this.lifts.set([w.re, w.im, w.re, w.im], i * 4);
       }
@@ -192,6 +215,9 @@ export class Trail {
     this.attribute.clearUpdateRanges();
     this.attribute.addUpdateRange(start * 6, (count - start) * 6);
     this.attribute.needsUpdate = true;
+    this.sideAttribute.clearUpdateRanges();
+    this.sideAttribute.addUpdateRange(start * 4, (count - start) * 4);
+    this.sideAttribute.needsUpdate = true;
     this.liftAttribute.clearUpdateRanges();
     this.liftAttribute.addUpdateRange(start * 4, (count - start) * 4);
     this.liftAttribute.needsUpdate = true;

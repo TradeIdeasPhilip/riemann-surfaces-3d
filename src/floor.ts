@@ -2,6 +2,7 @@ import * as THREE from "three";
 import { I } from "./complex";
 import {
   floorHeight,
+  floorHeightGlsl,
   floorUniforms,
   FOG_DENSITY,
   gridSpacing,
@@ -19,30 +20,29 @@ import {
  * of the seam can have different heights, which is what makes the 3D floor work.
  */
 const vertexShader = /* glsl */ `
-uniform float uLift;
-uniform vec2 uSheetDir;
-uniform vec2 uFocusDir;
-uniform float uCameraAngle;
+${floorHeightGlsl}
+/** 0 is the camera's own level.  1 is the next level up the log spiral, and so on. */
+uniform float uLevel;
 varying vec3 vWorld;
 void main() {
   float r = position.x;
   float phi = position.y;
   // Math angle, counterclockwise from Re.
   float angle = uCameraAngle + phi;
-  // √z, continued from the camera's direction.  phi/2 stays between -π/2 and π/2, so no jumps.
-  float sheetAngle = atan(uSheetDir.y, uSheetDir.x) + phi * 0.5;
-  vec2 w = sqrt(r) * vec2(cos(sheetAngle), sin(sheetAngle));
-  float height = uLift * (w.y * uFocusDir.x - w.x * uFocusDir.y);
+  float height = floorHeightAt(r, uRelAngle + phi + F_TAU * uLevel);
   vWorld = vec3(r * cos(angle), height, -r * sin(angle));
   gl_Position = projectionMatrix * viewMatrix * vec4(vWorld, 1.0);
 }
 `;
 
 const fragmentShader = /* glsl */ `
+${floorHeightGlsl}
+uniform float uLevel;
+/** 1 for the see-through levels above and below the camera's. */
+uniform float uGhost;
 uniform float uScale;
 uniform float uMajor;
 uniform float uMinor;
-uniform vec2 uSheetDir;
 uniform float uSheetMix;
 uniform vec3 uRainbow[9];
 uniform vec3 uFogColor;
@@ -62,13 +62,6 @@ float grid(vec2 p, float spacing, float widthPx) {
   return max(gridAxis(q.x, fw.x, widthPx), gridAxis(q.y, fw.y, widthPx));
 }
 
-vec2 csqrt(vec2 z) {
-  float r = length(z);
-  float a = sqrt(max(0.0, (r + z.x) * 0.5));
-  float b = sqrt(max(0.0, (r - z.x) * 0.5));
-  return vec2(a, z.y < 0.0 ? -b : b);
-}
-
 vec3 rainbow(float k) {
   return uRainbow[int(mod(k, 9.0))];
 }
@@ -80,16 +73,13 @@ void main() {
   vec3 color = plain;
 
   if (uSheetMix > 0.0) {
-    // Nine solid wedges of color, by the angle of √z on the camera's sheet.  Red is centered on
-    // √z = positive real.  All nine colors go around once as √z goes around once, which is two
-    // laps around the branch point.  So each sheet shows half of the rainbow, and the two edges
-    // of the cut, hidden behind the cloud, are about half a rainbow apart.
-    vec2 w = csqrt(p);
-    if (dot(w, uSheetDir) < 0.0) w = -w;
-    // Measure from the camera's direction so the angle never wraps around on the visible sheet.
-    vec2 relative = vec2(dot(w, uSheetDir), w.y * uSheetDir.x - w.x * uSheetDir.y);
-    float sheetAngle = atan(uSheetDir.y, uSheetDir.x);
-    float t = (atan(relative.y, relative.x) + sheetAngle) * 9.0 / 6.28318530718 + 0.5;
+    // Nine solid wedges of color, by the total angle around the branch point.  Red is centered on
+    // the positive real axis of the principal sheet.  All nine colors take two laps around the branch
+    // point, which is once around for √z itself.  So each sheet of √z, or each level of log, shows
+    // half of the rainbow, and the two edges of the cut, hidden behind the cloud, are about half a
+    // rainbow apart.
+    float total = uCameraTotal + cameraRelativeAngle(vWorld.xz) + F_TAU * uLevel;
+    float t = total * 9.0 / (2.0 * F_TAU) + 0.5;
     float k = floor(t);
     float f = t - k;
     float fw = max(fwidth(t), 1e-6);
@@ -119,11 +109,23 @@ void main() {
   color = mix(color, majorColor, major * mix(0.85, 0.55, uSheetMix));
   color = mix(color, vec3(0.80, 0.86, 1.00), axes);
 
+  // The other levels are mostly see-through, with the grid lines showing more.  Far from the
+  // branch point they're nearly flat and just stack up like plain floors, so fade them out there.
+  // What's left is the spiral ramp around the cloud.
+  float alpha = 1.0;
+  if (uGhost > 0.5) {
+    alpha = 0.16 + max(minor * 0.15, max(major * 0.45, axes * 0.6));
+    alpha *= 1.0 - smoothstep(16.0, 36.0, d);
+  }
+
   float dist = distance(vWorld, cameraPosition);
   float fog = 1.0 - exp(-uFogDensity * uFogDensity * dist * dist);
-  gl_FragColor = vec4(mix(color, uFogColor, fog), 1.0);
+  gl_FragColor = vec4(mix(color, uFogColor, fog), alpha);
 }
 `;
+
+/** Levels of the log spiral to draw above the camera's own.  The ones below are hidden by the floor. */
+const GHOST_LEVELS = 3;
 
 /** How bright the rainbow is on the floor.  Dim enough that the trails and robots stand out. */
 const RAINBOW_BRIGHTNESS = 0.6;
@@ -159,46 +161,63 @@ function polarGeometry() {
 
 type LabelInfo = { text: string; x: number; z: number; title: boolean };
 
+function floorMaterial(level: number) {
+  const ghost = level != 0;
+  return new THREE.ShaderMaterial({
+    vertexShader,
+    fragmentShader,
+    uniforms: {
+      // These are shared, so changing floorUniforms changes every floor material.
+      ...floorUniforms,
+      uLevel: { value: level },
+      uGhost: { value: ghost ? 1 : 0 },
+      uScale: { value: 1 },
+      uMajor: { value: 1 },
+      uMinor: { value: 0.2 },
+      uSheetMix: { value: 0 },
+      uRainbow: {
+        value: MY_RAINBOW.map((hex) => shaderColor(hex).multiplyScalar(RAINBOW_BRIGHTNESS)),
+      },
+      uFogColor: { value: shaderColor(SKY_COLOR) },
+      uFogDensity: { value: FOG_DENSITY },
+    },
+    // Both sides, in case the 3D floor tilts a piece away from the camera.
+    side: THREE.DoubleSide,
+    transparent: ghost,
+    depthWrite: !ghost,
+  });
+}
+
 /** The complex plane, drawn on the floor. */
 export class Floor {
-  readonly mesh: THREE.Mesh;
+  /** The camera's own level, plus see-through copies of the levels above it, for log. */
+  readonly meshes: THREE.Mesh<THREE.BufferGeometry, THREE.ShaderMaterial>[] = [];
   readonly labels = new THREE.Group();
-  private readonly material: THREE.ShaderMaterial;
   private readonly sprites: THREE.Sprite[] = [];
   private readonly spriteMaterials = new Map<string, THREE.SpriteMaterial>();
   private labelScale = NaN;
 
   constructor() {
-    this.material = new THREE.ShaderMaterial({
-      vertexShader,
-      fragmentShader,
-      uniforms: {
-        ...floorUniforms,
-        uScale: { value: 1 },
-        uMajor: { value: 1 },
-        uMinor: { value: 0.2 },
-        uSheetMix: { value: 0 },
-        uRainbow: {
-          value: MY_RAINBOW.map((hex) => shaderColor(hex).multiplyScalar(RAINBOW_BRIGHTNESS)),
-        },
-        uFogColor: { value: shaderColor(SKY_COLOR) },
-        uFogDensity: { value: FOG_DENSITY },
-      },
-      // Both sides, in case the 3D floor tilts a piece away from the camera.
-      side: THREE.DoubleSide,
-    });
-    this.mesh = new THREE.Mesh(polarGeometry(), this.material);
-    // The vertex shader moves everything, so three.js can't know where the floor is.
-    this.mesh.frustumCulled = false;
+    const geometry = polarGeometry();
+    for (let level = 0; level <= GHOST_LEVELS; level++) {
+      const mesh = new THREE.Mesh(geometry, floorMaterial(level));
+      // The vertex shader moves everything, so three.js can't know where the floor is.
+      mesh.frustumCulled = false;
+      this.meshes.push(mesh);
+    }
   }
 
-  update(scale: number, sheetMix: number) {
+  /** showLevels says whether to draw the see-through levels above the camera's. */
+  update(scale: number, sheetMix: number, showLevels: boolean) {
     const { major, minor } = gridSpacing(scale);
-    const u = this.material.uniforms;
-    u.uScale.value = scale;
-    u.uMajor.value = major;
-    u.uMinor.value = minor;
-    u.uSheetMix.value = sheetMix;
+    this.meshes.forEach((mesh, level) => {
+      const u = mesh.material.uniforms;
+      u.uScale.value = scale;
+      u.uMajor.value = major;
+      u.uMinor.value = minor;
+      u.uSheetMix.value = sheetMix;
+      mesh.visible = level == 0 || showLevels;
+    });
     if (scale != this.labelScale) {
       this.labelScale = scale;
       this.updateLabels(scale, major);

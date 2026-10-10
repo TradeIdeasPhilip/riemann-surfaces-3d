@@ -10,15 +10,13 @@ import {
   dot,
   format,
   negate,
-  sqrtNear,
-  sqrtPrincipal,
   type Complex,
 } from "./complex";
 import { Floor } from "./floor";
+import { LOGARITHM, SQUARE_ROOT, type MultiFunction } from "./functions";
 import { OFF_SHEET_OPACITY, Trail } from "./trail";
 import {
   BLOCK_RADIUS,
-  BLUE_COLOR,
   CAMERA_BLOCK_RADIUS,
   floorHeight,
   floorNormal,
@@ -26,7 +24,6 @@ import {
   FOG_DENSITY,
   gridSpacing,
   headingToward,
-  RED_COLOR,
   SKY_COLOR,
   toMath,
   toWorld,
@@ -39,8 +36,6 @@ import {
 const WALK_SPEED = 5;
 const RUN_SPEED = 11;
 const TURN_SPEED = 2.4;
-/** The 3D floor slider at its maximum.  See floorUniforms in world.ts. */
-const MAX_LIFT = 1.2;
 const START_PITCH = 0.34;
 const START_DISTANCE = 10;
 const LOOK_HEIGHT = 2.3;
@@ -65,6 +60,12 @@ function normalize(z: Complex): Complex {
   const r = abs(z) || 1;
   return { re: z.re / r, im: z.im / r };
 }
+
+function polar(r: number, angle: number): Complex {
+  return { re: r * Math.cos(angle), im: r * Math.sin(angle) };
+}
+
+const TAU = Math.PI * 2;
 
 /** Something that walks around the plane:  z itself, or the floating camera. */
 type Body = {
@@ -125,7 +126,7 @@ async function main() {
   scene.add(sun);
 
   const floor = new Floor();
-  scene.add(floor.mesh, floor.labels);
+  scene.add(...floor.meshes, floor.labels);
 
   const branchPoint = new BranchPoint();
   scene.add(branchPoint.group);
@@ -137,17 +138,36 @@ async function main() {
   ]);
 
   const zCharacter = new Character(Z_COLOR, "z");
-  const redCharacter = new Character(RED_COLOR, "√z");
-  const blueCharacter = new Character(BLUE_COLOR, "√z");
   const eyeMarker = new FloatingEye();
   eyeMarker.root.visible = false;
-  scene.add(zCharacter.root, redCharacter.root, blueCharacter.root, eyeMarker.root);
-
+  scene.add(zCharacter.root, eyeMarker.root);
   const zTrail = new Trail(Z_COLOR, 0.34, 0.02, true);
-  const redTrail = new Trail(RED_COLOR, 0.28, 0.025);
-  const blueTrail = new Trail(BLUE_COLOR, 0.28, 0.03);
-  const trails = [zTrail, redTrail, blueTrail];
-  scene.add(...trails.map((trail) => trail.mesh));
+  scene.add(zTrail.mesh);
+
+  /** The robots and trails for one function's outputs. */
+  type Cast = { characters: Character[]; trails: Trail[]; previous: Complex[] };
+  const casts = new Map<MultiFunction, Cast>();
+  /** Each function gets its own set of robots, made the first time we need them. */
+  function castFor(f: MultiFunction): Cast {
+    let result = casts.get(f);
+    if (!result) {
+      const characters = f.outputColors.map((color) => new Character(color, f.name));
+      const trails = f.outputColors.map((color, i) => new Trail(color, 0.28, 0.025 + 0.003 * i));
+      for (const character of characters) {
+        // Start out facing us.
+        character.heading = 0;
+      }
+      scene.add(...characters.map((c) => c.root), ...trails.map((t) => t.mesh));
+      result = { characters, trails, previous: [] };
+      casts.set(f, result);
+    }
+    return result;
+  }
+  let fn: MultiFunction = SQUARE_ROOT;
+  let cast = castFor(fn);
+  function allTrails() {
+    return [zTrail, ...cast.trails];
+  }
 
   // A ring that shows where you clicked.
   const clickRing = new THREE.Mesh(
@@ -169,7 +189,7 @@ async function main() {
   //
   const player: Body = {
     z: START_Z,
-    w: sqrtPrincipal(START_Z),
+    w: fn.principal(START_Z),
     heading: Math.PI,
   };
   const eye: Body = { z: START_Z, w: player.w, heading: Math.PI };
@@ -185,7 +205,6 @@ async function main() {
     pull: 1,
   };
   let sheetMix = 0;
-  let previousRed = player.w;
 
   function activeBody() {
     return mode == "walk" ? player : eye;
@@ -236,18 +255,55 @@ async function main() {
   exploreButton.addEventListener("click", () => setMode("explore"));
 
   function clearTrails() {
-    for (const trail of trails) {
+    for (const trail of allTrails()) {
       trail.clear();
     }
   }
   getById("clearTrails").addEventListener("click", clearTrails);
 
+  const functionButtons = new Map<MultiFunction, HTMLButtonElement>([
+    [SQUARE_ROOT, getById<HTMLButtonElement>("functionSqrt")],
+    [LOGARITHM, getById<HTMLButtonElement>("functionLog")],
+  ]);
+  const demoLists = new Map<MultiFunction, HTMLElement>([
+    [SQUARE_ROOT, getById("sqrtDemos")],
+    [LOGARITHM, getById("logDemos")],
+  ]);
+  const title = getById("title");
+  function setFunction(f: MultiFunction) {
+    setMode("walk");
+    autopilot = undefined;
+    for (const trail of cast.trails) {
+      trail.mesh.visible = false;
+    }
+    for (const character of cast.characters) {
+      character.root.visible = false;
+    }
+    fn = f;
+    cast = castFor(fn);
+    for (const trail of cast.trails) {
+      trail.mesh.visible = true;
+    }
+    for (const character of cast.characters) {
+      character.root.visible = true;
+    }
+    // Start over on the principal sheet.  The camera is on z's sheet now, since it follows z.
+    player.w = fn.principal(player.z);
+    cameraW = player.w;
+    cast.previous = fn.outputs(player.w);
+    clearTrails();
+    functionButtons.forEach((button, f) => button.classList.toggle("active", f == fn));
+    demoLists.forEach((list, f) => (list.hidden = f != fn));
+    title.textContent = `${fn.name} Walkabout`;
+  }
+  functionButtons.forEach((button, f) => button.addEventListener("click", () => setFunction(f)));
+
   function reset() {
     setMode("walk");
     autopilot = undefined;
     player.z = START_Z;
-    player.w = sqrtPrincipal(START_Z);
-    previousRed = player.w;
+    player.w = fn.principal(START_Z);
+    cast.previous = fn.outputs(player.w);
     player.heading = Math.PI;
     view.scale = targetScale = START_SCALE;
     cameraRig.yawOffset = 0;
@@ -283,7 +339,7 @@ async function main() {
       blocked = step > 0 && (dx * start.x + dz * start.z) / (step * start.length()) < -0.5;
     }
     body.z = toMath(x, z);
-    body.w = sqrtNear(body.z, body.w);
+    body.w = fn.continueTo(body.z, body.w);
     return blocked;
   }
 
@@ -475,6 +531,130 @@ async function main() {
     return speed;
   }
 
+  /**
+   * Follow a path exactly, at a steady speed in world units per second.
+   * path(0) should be where the body is now.  The path is in math coordinates.
+   */
+  function pathAutopilot(
+    body: Body,
+    path: (u: number) => Complex,
+    speed: number,
+    framing?: CameraFraming
+  ): Autopilot {
+    let u = 0;
+    return {
+      body,
+      framing,
+      step(dt) {
+        if (u >= 1) {
+          return undefined;
+        }
+        // How fast does the path move, in world units per unit of u?
+        const before = Math.max(0, u - 1e-4);
+        const after = Math.min(1, u + 1e-4);
+        const direction = sub(path(after), path(before));
+        const worldPerU = (abs(direction) * view.scale) / (after - before);
+        u = Math.min(1, u + (speed * dt) / Math.max(worldPerU, 1e-6));
+        // Aim at the point on the path, not just the next step, so we can't drift off of it.
+        const here = toWorld(body.z);
+        const there = toWorld(path(u));
+        moveBody(body, there.x - here.x, there.z - here.z);
+        body.heading = turnToward(body.heading, headingToward(direction.re, -direction.im), 8 * dt);
+        return speed;
+      },
+    };
+  }
+
+  /** A straight line from wherever the body is when this step starts. */
+  function lineTo(body: Body, to: Complex, speed = 8) {
+    return () => {
+      const from = body.z;
+      return pathAutopilot(body, (u) => ({
+        re: from.re + (to.re - from.re) * u,
+        im: from.im + (to.im - from.im) * u,
+      }), speed);
+    };
+  }
+
+  /**
+   * Circle the branch point at a fixed distance, from wherever the body is when this step starts,
+   * turning by angle radians.  Positive is counterclockwise.  The camera looks toward the middle.
+   */
+  function arcAround(body: Body, angle: number, speed: number, followWithCamera = true) {
+    return () => {
+      const r = abs(body.z);
+      const start = arg(body.z);
+      const framing = followWithCamera
+        ? {
+            pitch: 0.8,
+            distance: THREE.MathUtils.clamp(12 + r * view.scale * 0.9, 20, 45),
+            yawOffset: angle > 0 ? 1.15 : -1.15,
+          }
+        : undefined;
+      return pathAutopilot(body, (u) => polar(r, start + angle * u), speed, framing);
+    };
+  }
+
+  /** Stand still for a moment. */
+  function pause(body: Body, seconds: number) {
+    return (): Autopilot => {
+      let remaining = seconds;
+      return {
+        body,
+        step(dt) {
+          remaining -= dt;
+          return remaining > 0 ? 0 : undefined;
+        },
+      };
+    };
+  }
+
+  /** Do one step after another.  Each step is created when it starts, so it can start where the last one ended. */
+  function sequence(body: Body, steps: (() => Autopilot)[], onDone?: () => void): Autopilot {
+    let index = 0;
+    let current = steps[0]();
+    return {
+      body,
+      onDone,
+      get framing() {
+        return current.framing;
+      },
+      step(dt) {
+        for (;;) {
+          const speed = current.step(dt);
+          if (speed !== undefined) {
+            return speed;
+          }
+          index++;
+          if (index >= steps.length) {
+            return undefined;
+          }
+          current = steps[index]();
+        }
+      },
+    };
+  }
+
+  /**
+   * Stand the camera still, looking at target from far away.  For demos where z moves and the
+   * camera doesn't.  The camera starts on z's sheet:  we follow the straight line from z to target,
+   * so that line must not pass near the branch point.  look is a direction in math coordinates.
+   */
+  function parkCamera(target: Complex, look: Complex, pitch: number, distance: number) {
+    // Switching modes cancels the autopilot, but this might be called from inside one.
+    const pilot = autopilot;
+    setMode("explore");
+    autopilot = pilot;
+    eye.z = target;
+    eye.w = fn.continueTo(target, player.w);
+    eye.heading = headingToward(look.re, -look.im);
+    eyeHidden = true;
+    cameraRig.yawOffset = 0;
+    cameraRig.pitch = pitch;
+    cameraRig.distance = distance;
+    cameraRig.pull = 1;
+  }
+
   //
   // Demos
   //
@@ -518,12 +698,22 @@ async function main() {
     sheetCheckbox.checked = true;
     const radius = Math.max(abs(eye.z), (BLOCK_RADIUS + 2) / view.scale);
     autopilot = circleAutopilot(eye, complex(0, 0), radius, () => {
-      toast(
-        zOnCameraSheet()
-          ? "Only the camera moved, and it went around the branch point, so it switched sheets. That put it back on z's sheet: z is solid again, and the floor's colors are back where they started."
-          : "Only the camera moved, but it went around the branch point, so now it's on the other sheet. The floor's colors flipped, and z faded out because it's not on this sheet. The square roots never fade: they live on an ordinary plane. Go around again to get back.",
-        12000
-      );
+      const level = zLevel();
+      if (fn == LOGARITHM) {
+        toast(
+          level == 0
+            ? "Only the camera moved, and it went around the branch point, so it changed levels. That put it back on z's level: z is solid again."
+            : `Only the camera moved, but it went around the branch point, so it moved to a different level of the spiral. z is now ${Math.abs(level)} level${Math.abs(level) == 1 ? "" : "s"} ${level > 0 ? "above" : "below"} the camera's, so it faded${floorUniforms.uLift.value > 0 && level < 0 ? ", and with the 3D floor it's hidden under your feet" : ""}. The floor's colors moved half way around the rainbow. Go around the other way to get back.`,
+          13000
+        );
+      } else {
+        toast(
+          level == 0
+            ? "Only the camera moved, and it went around the branch point, so it switched sheets. That put it back on z's sheet: z is solid again, and the floor's colors are back where they started."
+            : "Only the camera moved, but it went around the branch point, so now it's on the other sheet. The floor's colors flipped, and z faded out because it's not on this sheet. The square roots never fade: they live on an ordinary plane. Go around again to get back.",
+          12000
+        );
+      }
     });
   }
   /**
@@ -532,16 +722,13 @@ async function main() {
    * the camera and fades.  The next time it comes back.
    */
   function demoSpiralStillCamera() {
-    setMode("explore");
     clearTrails();
     sheetCheckbox.checked = true;
     const start = player.z;
     const startDistance = abs(start) * view.scale;
     // The camera looks at a point half way between z and the branch point.  Sliding straight
-    // toward the branch point doesn't change sheets, so the camera starts on z's sheet.
+    // toward the branch point doesn't change sheets.
     const fraction = THREE.MathUtils.clamp((BLOCK_RADIUS + 0.5) / startDistance, 0.5, 1);
-    eye.z = { re: start.re * fraction, im: start.im * fraction };
-    eye.w = sqrtNear(eye.z, player.w);
     // Look from 45° clockwise of straight out.  That puts the cut, directly behind the cloud,
     // away from the spiral's landmarks, which are all on the line through z and the branch point.
     // The camera looks the opposite way, toward the branch point and 45° counterclockwise.
@@ -550,14 +737,14 @@ async function main() {
       re: -(out.re + out.im) * Math.SQRT1_2,
       im: -(out.im - out.re) * Math.SQRT1_2,
     };
-    eye.heading = headingToward(lookDirection.re, -lookDirection.im);
-    eyeHidden = true;
     // Back up far enough to see the whole spiral.
     const outerRadius = startDistance + 3 * (BLOCK_RADIUS + 0.4);
-    cameraRig.yawOffset = 0;
-    cameraRig.pitch = 0.8;
-    cameraRig.distance = THREE.MathUtils.clamp(outerRadius * 2.2, 25, 150);
-    cameraRig.pull = 1;
+    parkCamera(
+      { re: start.re * fraction, im: start.im * fraction },
+      lookDirection,
+      0.8,
+      THREE.MathUtils.clamp(outerRadius * 2.2, 25, 150)
+    );
     autopilot = spiralAutopilot(
       player,
       () =>
@@ -573,6 +760,201 @@ async function main() {
   getById("demoSpiral").addEventListener("click", demoSpiral);
   getById("demoCamera").addEventListener("click", demoCamera);
   getById("demoSpiralStill").addEventListener("click", demoSpiralStillCamera);
+
+  //
+  // Log demos
+  //
+
+  /** Log demos use absolute positions, like z = 2, so they start at the standard zoom. */
+  function startLogDemo() {
+    clearTrails();
+    view.scale = targetScale = START_SCALE;
+  }
+
+  /**
+   * From the 2D version:  circles of radius 2, 4, and 6.
+   * Distance from the branch point becomes the real part, and the angle becomes the imaginary part.
+   */
+  function demoLogCircles() {
+    setMode("walk");
+    startLogDemo();
+    autopilot = sequence(
+      player,
+      [
+        () => gotoAutopilot(player, complex(2, 0)),
+        arcAround(player, TAU, 9),
+        lineTo(player, complex(4, 0)),
+        arcAround(player, TAU, 12),
+        lineTo(player, complex(6, 0)),
+        arcAround(player, -TAU, 15),
+      ],
+      () =>
+        toast(
+          "Each counterclockwise lap moved every value of log z up by 2π𝒾, and the clockwise lap moved them back down. Walking out from 2 to 4 to 6 moved them to the right, to ln 2, ln 4, and ln 6. Log turns polar coordinates into rectangular ones: the distance becomes the real part, and the angle becomes the imaginary part.",
+          14000
+        )
+    );
+  }
+
+  /**
+   * From the 2D version:  walk straight at the branch point.  It keeps zooming in so z can keep going.
+   * ln|z| heads toward -∞, so every value of log z races off together.
+   */
+  function demoLogApproach() {
+    setMode("walk");
+    startLogDemo();
+    const angle = Math.PI / 2;
+    autopilot = sequence(
+      player,
+      [
+        () => gotoAutopilot(player, polar(Math.E, angle)),
+        (): Autopilot => {
+          const startLn = Math.log(abs(player.z));
+          const endLn = -5;
+          const duration = 10;
+          let t = 0;
+          return {
+            body: player,
+            // Look across z's path, so we can see the values of log z run away.
+            framing: { pitch: 0.75, distance: 30, yawOffset: -Math.PI / 2 },
+            step(dt) {
+              if (t >= 1) {
+                return undefined;
+              }
+              t = Math.min(1, t + dt / duration);
+              const r = Math.exp(startLn + (endLn - startLn) * t);
+              // Zoom in just enough to keep z outside the forbidden zone.
+              view.scale = targetScale = Math.max(START_SCALE, (BLOCK_RADIUS + 2) / r);
+              player.z = polar(r, angle);
+              player.w = fn.continueTo(player.z, player.w);
+              player.heading = turnToward(
+                player.heading,
+                headingToward(-Math.cos(angle), Math.sin(angle)),
+                6 * dt
+              );
+              // Once the zoom takes over, z walks in place while the plane rushes past.
+              return 4;
+            },
+          };
+        },
+      ],
+      () =>
+        toast(
+          "As z gets closer to the branch point, ln|z| heads to −∞, so every value of log z races off in the same direction. In complex analysis there's only one infinity, so if z could reach the branch point, all of the values would be the same: ∞. Scroll to zoom back out, or press Reset.",
+          14000
+        )
+    );
+  }
+
+  /**
+   * New:  z walks a logarithmic spiral, and every value of log z walks a straight line.
+   * The camera stands still, so z climbs the camera's spiral staircase as it goes.
+   */
+  function demoLogSpiral() {
+    setMode("walk");
+    startLogDemo();
+    const r0 = 1;
+    const r1 = 8;
+    const turns = 2;
+    const growth = Math.log(r1 / r0) / (TAU * turns);
+    autopilot = sequence(
+      player,
+      [
+        () => gotoAutopilot(player, complex(r0, 0)),
+        () => {
+          // Look down from high above, to the south.
+          parkCamera(complex(0.8, -1.5), complex(0, 1), 0.95, 85);
+          clearTrails();
+          return pathAutopilot(
+            player,
+            (u) => {
+              const theta = u * turns * TAU;
+              return polar(r0 * Math.exp(growth * theta), theta);
+            },
+            12
+          );
+        },
+      ],
+      () =>
+        toast(
+          `z walked a logarithmic spiral, but every value of log z walked a perfectly straight line. Each lap multiplied z's distance by ${Math.exp(growth * TAU).toFixed(2)}, which always adds the same amount to the real part, while the angle adds 2π to the imaginary part. z faded because each lap behind the cloud took it up a level from the camera's.`,
+          15000
+        )
+    );
+  }
+
+  /**
+   * New:  z walks around a slice of pizza, with two straight sides pointing at the branch point
+   * and two curved sides around it.  Every value of log z walks a rectangle.
+   */
+  function demoLogRectangle() {
+    setMode("walk");
+    startLogDemo();
+    const inner = 2.5;
+    const outer = 9;
+    const half = (75 * Math.PI) / 180;
+    autopilot = sequence(
+      player,
+      [
+        () => gotoAutopilot(player, polar(inner, -half)),
+        () => {
+          parkCamera(complex(6, 0), complex(-1, 0), 1.0, 90);
+          clearTrails();
+          return lineTo(player, polar(outer, -half), 10)();
+        },
+        arcAround(player, 2 * half, 10, false),
+        lineTo(player, polar(inner, half), 10),
+        arcAround(player, -2 * half, 10, false),
+      ],
+      () =>
+        toast(
+          "A slice of pizza became a rectangle! The straight sides, pointing at the branch point, became lines parallel to the real axis. The curved sides, around the branch point, became lines parallel to the imaginary axis. And the corners stayed square: log preserves angles.",
+          14000
+        )
+    );
+  }
+
+  /**
+   * New:  the parking garage.  The camera stays on the ground floor while z walks up two levels and
+   * back down.  This needs the 3D floor, so it turns that on.
+   */
+  function demoLogGarage() {
+    setMode("walk");
+    startLogDemo();
+    sheetCheckbox.checked = true;
+    if (Number(liftSlider.value) < 0.8) {
+      liftSlider.value = "0.8";
+    }
+    const radius = 3;
+    autopilot = sequence(
+      player,
+      [
+        () => gotoAutopilot(player, polar(radius, -Math.PI / 2)),
+        () => {
+          // Low, and off to the side, so you can see the levels stacked up.
+          parkCamera(player.z, normalize(complex(-0.6, 1)), 0.28, 42);
+          clearTrails();
+          return arcAround(player, TAU, 12, false)();
+        },
+        arcAround(player, TAU, 12, false),
+        pause(player, 1.5),
+        arcAround(player, -TAU, 12, false),
+        arcAround(player, -TAU, 12, false),
+      ],
+      () =>
+        toast(
+          "A spiral staircase! Each counterclockwise lap climbed one level, and each clockwise lap came back down one. The camera stayed on the ground floor, so z faded whenever it was on a different level. The levels connect behind the cloud, where you can't see the seam.",
+          14000
+        )
+    );
+  }
+
+  getById("demoLogCircles").addEventListener("click", demoLogCircles);
+  getById("demoLogApproach").addEventListener("click", demoLogApproach);
+  getById("demoLogSpiral").addEventListener("click", demoLogSpiral);
+  getById("demoLogRectangle").addEventListener("click", demoLogRectangle);
+  getById("demoLogGarage").addEventListener("click", demoLogGarage);
+  getById("demoLogCamera").addEventListener("click", demoCamera);
 
   //
   // Keyboard
@@ -776,21 +1158,25 @@ async function main() {
 
   /**
    * The camera is attached to its subject by a stick that never passes through the branch point.
-   * So the camera is on the same sheet as its subject.  The floor shows the branch of √z that agrees
-   * with the camera, and its cut is the ray directly behind the branch point, hidden by the cloud.
+   * So the camera is on the same sheet as its subject.  The floor shows the branch of the function
+   * that agrees with the camera, and its cut is the ray directly behind the branch point, hidden by
+   * the cloud.  This is the function's value at the camera, on the camera's sheet.
    */
-  function cameraSheetDirection() {
+  function cameraValue() {
     const cameraZ = toMath(camera.position.x, camera.position.z);
-    return normalize(sqrtNear(cameraZ, activeBody().w));
+    return fn.continueTo(cameraZ, activeBody().w);
   }
-  let sheetDirection = cameraSheetDirection();
+  let cameraW = player.w;
   /**
-   * z lives on the Riemann surface.  player.w (the red root) says where:  it's continued along
-   * z's path.  The camera's sheet agrees with z if its value of √z here is the same as player.w.
-   * The square roots live on an ordinary plane, so they're always visible.
+   * z lives on the Riemann surface.  player.w (the red robot) says where:  it's continued along
+   * z's path.  This says how many sheets (or levels, for log) z is above the camera's.
+   * The outputs live on an ordinary plane, so they're always visible.
    */
+  function zLevel() {
+    return fn.levels(player.w, fn.continueTo(player.z, cameraW));
+  }
   function zOnCameraSheet() {
-    return dot(player.w, sheetDirection) >= 0;
+    return zLevel() == 0;
   }
 
   //
@@ -835,11 +1221,13 @@ async function main() {
    */
   function updateFloorShape(dt: number) {
     const u = floorUniforms;
-    u.uSheetDir.value.set(sheetDirection.re, sheetDirection.im);
-    const focus = normalize(activeBody().w);
-    u.uFocusDir.value.set(focus.re, focus.im);
+    const focus = activeBody().w;
+    u.uFunction.value = fn.shaderId;
     u.uCameraAngle.value = Math.atan2(-camera.position.z, camera.position.x);
-    const wanted = Number(liftSlider.value) * MAX_LIFT;
+    u.uCameraTotal.value = fn.total(cameraW);
+    u.uRelAngle.value = fn.relative(focus, cameraW);
+    u.uFocusTotal.value = fn.total(focus);
+    const wanted = Number(liftSlider.value) * fn.maxLift;
     const lift = u.uLift.value + (wanted - u.uLift.value) * (1 - Math.exp(-dt * 6));
     u.uLift.value = Math.abs(lift - wanted) < 1e-4 ? wanted : lift;
   }
@@ -855,17 +1243,28 @@ async function main() {
     lastReadout = time;
     const chip = (color: number) =>
       `<span class="chip" style="background:#${color.toString(16).padStart(6, "0")}"></span>`;
-    const red = player.w;
-    const blue = negate(player.w);
+    const outputs = fn.outputs(player.w);
+    const rows = outputs
+      .map((w, i) => `<tr><td>${chip(fn.outputColors[i])}${fn.name}</td><td>${format(w)}</td></tr>`)
+      .join("");
     const { major } = gridSpacing(view.scale);
+    const level = zLevel();
+    let where: string;
+    if (level == 0) {
+      where = fn == LOGARITHM ? "z is on the camera's level" : "z is on the camera's sheet";
+    } else if (fn == LOGARITHM) {
+      const count = Math.abs(level) == 1 ? "1 level" : `${Math.abs(level)} levels`;
+      where = `z is ${count} ${level > 0 ? "above" : "below"} the camera's, so it's faded`;
+    } else {
+      where = "z is on the other sheet, so it's faded";
+    }
     readout.innerHTML = `
       <table>
         <tr><td>${chip(Z_COLOR)}z</td><td>${format(player.z)}</td></tr>
-        <tr><td>${chip(RED_COLOR)}√z</td><td>${format(red)}</td></tr>
-        <tr><td>${chip(BLUE_COLOR)}√z</td><td>${format(blue)}</td></tr>
+        ${rows}
       </table>
       <div class="small">
-        ${zOnCameraSheet() ? "z is on the camera's sheet" : "z is on the other sheet, so it's faded"}<br>
+        ${where}<br>
         Grid lines every ${+major.toPrecision(6)} · zone radius ${(BLOCK_RADIUS / view.scale).toPrecision(3)}
         ${mode == "explore" ? "<br>Moving the camera only. z stays put." : ""}
       </div>`;
@@ -963,12 +1362,9 @@ async function main() {
       }
     }
 
-    // The square roots follow z continuously.  This is analytic continuation, one small step at a time.
-    player.w = sqrtNear(player.z, player.w);
-    const redStep = sub(player.w, previousRed);
-    previousRed = player.w;
-    const red = player.w;
-    const blue = negate(red);
+    // The outputs follow z continuously.  This is analytic continuation, one small step at a time.
+    player.w = fn.continueTo(player.z, player.w);
+    const outputs = fn.outputs(player.w);
 
     // Characters
     toWorld(player.z, 0, zCharacter.root.position);
@@ -976,14 +1372,15 @@ async function main() {
     zCharacter.animate(dt, moving == player ? speed : 0);
     zCharacter.nameplate.setValue(format(player.z));
 
-    toWorld(red, 0, redCharacter.root.position);
-    toWorld(blue, 0, blueCharacter.root.position);
-    const rootSpeed = steerRoot(redCharacter, redStep, dt);
-    steerRoot(blueCharacter, negate(redStep), dt);
-    redCharacter.animate(dt, rootSpeed);
-    blueCharacter.animate(dt, rootSpeed);
-    redCharacter.nameplate.setValue(format(red));
-    blueCharacter.nameplate.setValue(format(blue));
+    cast.characters.forEach((character, i) => {
+      const w = outputs[i];
+      toWorld(w, 0, character.root.position);
+      const step = sub(w, cast.previous[i] ?? w);
+      character.animate(dt, steerRoot(character, step, dt));
+      character.nameplate.setValue(format(w));
+      maybeAddToTrail(cast.trails[i], w);
+    });
+    cast.previous = outputs;
 
     toWorld(eye.z, 0, eyeMarker.root.position);
     eyeMarker.heading = eye.heading;
@@ -991,9 +1388,7 @@ async function main() {
     eyeMarker.root.visible = mode == "explore" && !eyeHidden;
 
     maybeAddToTrail(zTrail, player.z, player.w);
-    maybeAddToTrail(redTrail, red);
-    maybeAddToTrail(blueTrail, blue);
-    for (const trail of trails) {
+    for (const trail of allTrails()) {
       trail.update();
     }
 
@@ -1005,18 +1400,25 @@ async function main() {
     }
 
     updateCamera(dt);
-    sheetDirection = cameraSheetDirection();
+    cameraW = cameraValue();
     updateFloorShape(dt);
     sheetMix += ((sheetCheckbox.checked ? 1 : 0) - sheetMix) * (1 - Math.exp(-dt * 6));
-    floor.update(view.scale, sheetMix);
+    // The see-through levels of the parking garage only make sense for log, and only in 3D.
+    floor.update(view.scale, sheetMix, fn == LOGARITHM && floorUniforms.uLift.value > 0.02);
 
     standOnFloor(zCharacter.root, zCharacter.shadow);
-    standOnFloor(redCharacter.root, redCharacter.shadow);
-    standOnFloor(blueCharacter.root, blueCharacter.shadow);
+    if (fn == LOGARITHM) {
+      // On the log spiral z might be on a different level.  Put it there, at its own height.
+      zCharacter.root.position.y =
+        floorUniforms.uLift.value * (fn.total(player.w) - floorUniforms.uFocusTotal.value);
+    }
+    for (const character of cast.characters) {
+      standOnFloor(character.root, character.shadow);
+    }
     standOnFloor(eyeMarker.root, eyeMarker.shadow);
     clickRing.position.y = floorHeight(clickRing.position.x, clickRing.position.z) + 0.04;
 
-    // z fades when it's on the other sheet from the camera.  The square roots never fade.
+    // z fades when it's on the other sheet from the camera.  The outputs never fade.
     zCharacter.setOpacity(zOnCameraSheet() ? 1 : OFF_SHEET_OPACITY);
 
     branchPoint.update(dt, time, floorHeight);
@@ -1024,11 +1426,9 @@ async function main() {
     renderer.render(scene, camera);
   }
 
-  // Start with the roots facing us, and everyone waving hello.
-  redCharacter.heading = 0;
-  blueCharacter.heading = 0;
+  // Everyone waves hello.
   setTimeout(() => {
-    for (const character of [zCharacter, redCharacter, blueCharacter]) {
+    for (const character of [zCharacter, ...cast.characters]) {
       character.emote("Wave");
     }
   }, 700);
@@ -1047,7 +1447,16 @@ async function main() {
     demoSpiral,
     demoCamera,
     demoSpiralStillCamera,
+    demoLogCircles,
+    demoLogApproach,
+    demoLogSpiral,
+    demoLogRectangle,
+    demoLogGarage,
+    useLog: () => setFunction(LOGARITHM),
+    useSqrt: () => setFunction(SQUARE_ROOT),
     zOnCameraSheet,
+    zLevel,
+    busy: () => autopilot !== undefined,
     zoomBy,
   };
 }

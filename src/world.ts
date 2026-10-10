@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { dot, sqrtPrincipal, type Complex } from "./complex";
+import type { Complex } from "./complex";
 
 /*
  * Two coordinate systems:
@@ -53,37 +53,52 @@ export const MY_RAINBOW = [
 ];
 
 /**
- * The 3D floor is the Riemann surface itself:  the height is the imaginary part of √z,
- * measured relative to √ of whatever the camera is following.  So the floor is level
- * under the camera's subject, rises on the right as it goes behind the branch point,
- * and falls on the left.  The two edges meet behind the cloud, at different heights.
+ * Everything about the floor is measured by a "total angle", τ:  how far z has turned around the
+ * branch point, counting full turns, relative to whatever the camera is following.  On the camera's
+ * sheet, τ at any point is uRelAngle plus that point's angle from the camera's direction, which is
+ * between -π and π.  The cut is where that angle jumps, directly behind the branch point.
+ *
+ * The 3D floor is the Riemann surface itself.  The height is
+ *   √:   lift × Im(√z) relative to √ at the camera's subject = lift × √r × sin(τ/2)
+ *   log: lift × τ, a spiral ramp, like a parking garage.
+ * Either way it's level under the camera's subject, rises on the right as it goes behind the branch
+ * point, and falls on the left.  The two edges meet behind the cloud, at different heights.
  *
  * These are shared by every shader that draws on the floor, and by floorHeight().
  */
 export const floorUniforms = {
+  /** 0 for √, 1 for log.  See MultiFunction.shaderId. */
+  uFunction: { value: 0 },
   /** 0 for a flat floor.  Bigger is taller. */
   uLift: { value: 0 },
-  /** Unit vector.  The value of √z straight toward the camera, on the camera's sheet. */
-  uSheetDir: { value: new THREE.Vector2(1, 0) },
-  /** Unit vector.  √z where the camera's subject is standing. */
-  uFocusDir: { value: new THREE.Vector2(1, 0) },
   /** The angle of the camera, as seen from the branch point.  The cut is directly opposite. */
   uCameraAngle: { value: 0 },
+  /** The total angle of the camera's own value.  This picks the colors. */
+  uCameraTotal: { value: 0 },
+  /** The camera's total angle minus its subject's.  Always between -π and π. */
+  uRelAngle: { value: 0 },
+  /** The total angle of the camera's subject.  For putting z's trail at its own height. */
+  uFocusTotal: { value: 0 },
 };
+
+/** The angle of this point around the branch point, measured from the camera's direction, -π to π. */
+export function cameraRelativeAngle(x: number, worldZ: number) {
+  return wrapAngle(Math.atan2(-worldZ, x) - floorUniforms.uCameraAngle.value);
+}
 
 /** Height of the floor at this point, in world units.  This matches the floor and trail shaders. */
 export function floorHeight(x: number, worldZ: number) {
-  const lift = floorUniforms.uLift.value;
+  const u = floorUniforms;
+  const lift = u.uLift.value;
   if (lift == 0) {
     return 0;
   }
-  const sheet = floorUniforms.uSheetDir.value;
-  const focus = floorUniforms.uFocusDir.value;
-  let w = sqrtPrincipal({ re: x, im: -worldZ });
-  if (dot(w, { re: sheet.x, im: sheet.y }) < 0) {
-    w = { re: -w.re, im: -w.im };
+  const tau = u.uRelAngle.value + cameraRelativeAngle(x, worldZ);
+  if (u.uFunction.value == 0) {
+    return lift * Math.sqrt(Math.hypot(x, worldZ)) * Math.sin(tau / 2);
+  } else {
+    return lift * tau;
   }
-  return lift * (w.im * focus.x - w.re * focus.y);
 }
 
 /** The floor's surface normal, for tilting shadows. */
@@ -94,24 +109,31 @@ export function floorNormal(x: number, worldZ: number, target = new THREE.Vector
   return target.set(-dx, 1, -dz).normalize();
 }
 
-/**
- * GLSL to match floorHeight().  Expects the uniforms in floorUniforms.
- * The floor itself doesn't use this, because it needs both sides of the cut at the same spot.
- */
+/** GLSL to match floorHeight() and cameraRelativeAngle().  Uses the uniforms in floorUniforms. */
 export const floorHeightGlsl = /* glsl */ `
+uniform float uFunction;
 uniform float uLift;
-uniform vec2 uSheetDir;
-uniform vec2 uFocusDir;
-vec2 csqrt(vec2 z) {
-  float r = length(z);
-  float a = sqrt(max(0.0, (r + z.x) * 0.5));
-  float b = sqrt(max(0.0, (r - z.x) * 0.5));
-  return vec2(a, z.y < 0.0 ? -b : b);
+uniform float uCameraAngle;
+uniform float uCameraTotal;
+uniform float uRelAngle;
+uniform float uFocusTotal;
+const float F_PI = 3.14159265358979;
+const float F_TAU = 6.28318530717959;
+float wrapAngle(float a) {
+  return mod(a + F_PI, F_TAU) - F_PI;
+}
+float cameraRelativeAngle(vec2 worldXZ) {
+  return wrapAngle(atan(-worldXZ.y, worldXZ.x) - uCameraAngle);
+}
+/** r is the distance from the branch point in world units.  tau is relative to the camera's subject. */
+float floorHeightAt(float r, float tau) {
+  if (uFunction < 0.5) {
+    return uLift * sqrt(r) * sin(tau * 0.5);
+  }
+  return uLift * tau;
 }
 float floorHeight(vec2 worldXZ) {
-  vec2 w = csqrt(vec2(worldXZ.x, -worldXZ.y));
-  if (dot(w, uSheetDir) < 0.0) w = -w;
-  return uLift * (w.y * uFocusDir.x - w.x * uFocusDir.y);
+  return floorHeightAt(length(worldXZ), uRelAngle + cameraRelativeAngle(worldXZ));
 }
 `;
 
