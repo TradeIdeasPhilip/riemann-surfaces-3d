@@ -43,6 +43,18 @@ npm run dev
   the camera. Its cut is directly behind the cloud. Walk the camera once around the branch point and you're
   on the other sheet.
 
+## Publishing
+
+Every push to `master` builds the site and publishes it to GitHub Pages, using
+[.github/workflows/deploy.yml](.github/workflows/deploy.yml). The compiled output is never committed:
+`dist/` is in `.gitignore`, and the Actions run builds a fresh copy each time. To redeploy without a
+new commit, use **Actions → Deploy to GitHub Pages → Run workflow**.
+
+One-time setup: in the GitHub repo, **Settings → Pages → Build and deployment → Source: GitHub Actions**.
+
+`npm run build` also runs `tsc`, so a type error fails the deploy and the live site keeps the last
+good version.
+
 ## Credits
 
 Robot model: "RobotExpressive" by [Tomás Laulhé (Quaternius)](https://quaternius.com/), CC0 1.0,
