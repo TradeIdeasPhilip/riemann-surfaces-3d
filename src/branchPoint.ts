@@ -152,12 +152,15 @@ function radialTexture(stops: [number, string][]) {
   return texture;
 }
 
-/** A soft dark spot to put under things so they look like they're standing on the floor. */
-export function makeBlobShadow(radius: number) {
+/**
+ * A soft dark spot to put under things so they look like they're standing on the floor.
+ * dark is for a shadow that has to be seen from farther away.
+ */
+export function makeBlobShadow(radius: number, dark = false) {
   const geometry = new THREE.CircleGeometry(radius, 32);
   geometry.rotateX(-Math.PI / 2);
   const material = new THREE.MeshBasicMaterial({
-    map: blobTexture,
+    map: dark ? darkBlobTexture : blobTexture,
     transparent: true,
     depthWrite: false,
   });
@@ -170,6 +173,11 @@ export function makeBlobShadow(radius: number) {
 const blobTexture = radialTexture([
   [0, "rgba(0,0,0,0.6)"],
   [0.6, "rgba(0,0,0,0.25)"],
+  [1, "rgba(0,0,0,0)"],
+]);
+const darkBlobTexture = radialTexture([
+  [0, "rgba(0,0,0,0.85)"],
+  [0.55, "rgba(0,0,0,0.6)"],
   [1, "rgba(0,0,0,0)"],
 ]);
 

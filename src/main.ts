@@ -1,7 +1,7 @@
 import * as THREE from "three";
 import "@fontsource/roboto/latin-500.css";
 import "./style.css";
-import { BranchPoint } from "./branchPoint";
+import { BranchPoint, makeBlobShadow } from "./branchPoint";
 import { Character, FloatingEye, loadCharacterModel } from "./characters";
 import {
   abs,
@@ -176,6 +176,10 @@ async function main() {
   ]);
 
   const zCharacter = new Character(Z_COLOR, "z");
+  /** z's shadow on the camera's floor, when z is up on a different sheet.  See dropShadow(). */
+  const zDropShadow = makeBlobShadow(0.8, true);
+  zDropShadow.visible = false;
+  scene.add(zDropShadow);
   const eyeMarker = new FloatingEye();
   eyeMarker.root.visible = false;
   scene.add(zCharacter.root, eyeMarker.root);
@@ -273,7 +277,7 @@ async function main() {
   const exploreButton = getById<HTMLButtonElement>("exploreMode");
   const sheetCheckbox = getById<HTMLInputElement>("sheetColors");
   const liftSlider = getById<HTMLInputElement>("lift");
-  /** What to do with z when it's on a different sheet from the camera:  "fade", "solid", or "spot". */
+  /** What to do with z when it's on a different sheet from the camera:  "fade" or "solid". */
   const offSheetSelect = getById<HTMLSelectElement>("offSheet");
   /** Hide the floating eye when a demo puts it somewhere it would just be in the way. */
   let eyeHidden = false;
@@ -1256,6 +1260,24 @@ async function main() {
     camera.lookAt(focus);
   }
 
+  /**
+   * When z is solid, on a sheet above the camera's, it throws a shadow straight down onto the camera's
+   * floor, like the floating eye does.  The farther the shadow falls, the bigger and fainter it gets.
+   */
+  function dropShadow(zSheet: number, solid: boolean) {
+    const { x, y, z } = zCharacter.root.position;
+    const floorY = floorHeight(x, z, 0);
+    const fall = y - floorY;
+    zDropShadow.visible = solid && zSheet > 0 && fall > 0.1;
+    if (!zDropShadow.visible) {
+      return;
+    }
+    zDropShadow.position.set(x, floorY + 0.03, z);
+    zDropShadow.quaternion.setFromUnitVectors(up, floorNormal(x, z, 0, shadowNormal));
+    zDropShadow.scale.setScalar(1 + fall * 0.06);
+    zDropShadow.material.opacity = THREE.MathUtils.clamp(1.15 - fall * 0.04, 0.55, 1);
+  }
+
   /** Put something on the floor, and tilt its shadow to match the floor. */
   const shadowNormal = new THREE.Vector3();
   const up = new THREE.Vector3(0, 1, 0);
@@ -1495,12 +1517,6 @@ async function main() {
     // z stands on its own sheet.  With the 3D floor, that might be one of the see-through ones.
     const zSheet = fn == LOGARITHM ? zLevel() : zOnCameraSheet() ? 0 : 1;
     const offSheetStyle = offSheetSelect.value;
-    if (offSheetStyle == "spot" && zSheet > 0) {
-      floorUniforms.uSpot.value.set(zCharacter.root.position.x, zCharacter.root.position.z, 1.1);
-      floorUniforms.uSpotLevel.value = zSheet;
-    } else {
-      floorUniforms.uSpotLevel.value = -1;
-    }
     // The other sheets are see-through.  They fade in as the 3D floor separates them from this one.
     floor.update(sheetMix, {
       count: fn == LOGARITHM ? 3 : 1,
@@ -1514,6 +1530,7 @@ async function main() {
 
     standOnFloor(zCharacter.root, zCharacter.shadow, zSheet);
     standOnFloor(eyeMarker.root, eyeMarker.shadow);
+    dropShadow(zSheet, offSheetStyle == "solid");
     clickRing.position.y = floorHeight(clickRing.position.x, clickRing.position.z) + 0.04;
 
     // z might fade when it's on the other sheet from the camera.  The outputs never fade.
@@ -1557,6 +1574,7 @@ async function main() {
     zLevel,
     busy: () => autopilot !== undefined,
     zHeight: () => zCharacter.root.position.y,
+    zDropShadow,
     zoomBy,
   };
 }

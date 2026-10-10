@@ -92,13 +92,6 @@ export function makeFloorUniforms() {
     uCameraTotal: { value: 0 },
     /** The camera's total angle minus its subject's.  Always between -π and π. */
     uRelAngle: { value: 0 },
-    /**
-     * Show the see-through level uSpotLevel as solid in a small circle, under z.
-     * x and y are the world x and z of the middle, and z is the radius.
-     */
-    uSpot: { value: new THREE.Vector3() },
-    /** -1 for no spot. */
-    uSpotLevel: { value: -1 },
   };
 }
 export type FloorUniforms = ReturnType<typeof makeFloorUniforms>;

@@ -43,14 +43,12 @@ ${floorHeightGlsl}
 uniform float uLevel;
 /** 1 for the see-through levels above and below the camera's. */
 uniform float uGhost;
-/** For the see-through levels.  0 hides everything but the spot.  See uSpot. */
+/** For the see-through levels.  0 hides them, 1 is normal. */
 uniform float uGhostFill;
 /** The see-through levels fade out between these distances from the branch point, in world units. */
 uniform vec2 uGhostFade;
 /** How solid the see-through levels are, not counting the grid lines. */
 uniform float uGhostBase;
-uniform vec3 uSpot;
-uniform float uSpotLevel;
 uniform float uScale;
 /** The math point at the world's origin.  See Space. */
 uniform vec2 uCenter;
@@ -130,12 +128,6 @@ void main() {
   if (uGhost > 0.5) {
     alpha = uGhostBase + max(minor * 0.15, max(major * 0.45, axes * 0.6));
     alpha *= (1.0 - smoothstep(uGhostFade.x, uGhostFade.y, d)) * uGhostFill;
-    if (abs(uLevel - uSpotLevel) < 0.5) {
-      // A solid patch of this level, for z to stand on.
-      float fromSpot = distance(vWorld.xz, uSpot.xy);
-      float edge = fwidth(fromSpot);
-      alpha = max(alpha, 1.0 - smoothstep(uSpot.z - edge, uSpot.z, fromSpot));
-    }
   }
 
   float dist = distance(vWorld, cameraPosition);
@@ -266,13 +258,11 @@ export class Floor {
 
   /**
    * The see-through levels above the camera's:  how many to draw (for log, or 1 for the other sheet of
-   * √), how solid they are (0 to 1), and where they fade out.  With fill 0, a level only shows up if it
-   * has the spot under z.  See uSpot.
+   * √), how solid they are (0 to 1), and where they fade out.
    */
   update(sheetMix: number, levels = { count: 0, fill: 0, fade: [16, 36], base: 0.16 }) {
     const { scale, center } = this.space;
     const { major, minor } = gridSpacing(scale);
-    const spotLevel = floorUniforms.uSpotLevel.value;
     this.meshes.forEach((mesh, level) => {
       const u = mesh.material.uniforms;
       u.uScale.value = scale;
@@ -283,8 +273,7 @@ export class Floor {
       u.uGhostFill.value = levels.fill;
       u.uGhostFade.value.set(levels.fade[0], levels.fade[1]);
       u.uGhostBase.value = levels.base;
-      mesh.visible =
-        level == 0 || (level <= levels.count && (levels.fill > 0 || level == spotLevel));
+      mesh.visible = level == 0 || (level <= levels.count && levels.fill > 0);
     });
     const key = `${scale} ${center.re} ${center.im}`;
     if (key != this.labelKey) {
