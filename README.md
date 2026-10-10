@@ -61,11 +61,14 @@ things fade) works through that interface, using the "total angle" around the br
 - **Rainbow floor.** Nine solid wedges ([myRainbow](https://github.com/TradeIdeasPhilip/canvas-recorder/blob/master/src/glib/my-rainbow.ts)),
   by the angle of √z. All nine go around once per turn of √z, which is two turns of z, so each sheet
   shows half the rainbow.
-- **3D floor.** The floor is the Riemann surface: height is Im(√z), measured relative to √ of whatever
-  the camera is following. It's level there, rises on the right as it goes behind the cloud, and falls on
-  the left. The floor is a polar mesh whose seam always points directly away from the camera, so the two
-  edges of the cut can have different heights (`src/floor.ts`). `floorHeight()` in `src/world.ts`
+- **3D floor.** The floor is the Riemann surface, embedded in 3D. For √z the camera's sheet is an opaque
+  valley, level under whatever the camera is following and rising on both sides toward the cut. The other
+  sheet is a see-through ceiling coming down on both sides. They meet at the cut, behind the cloud, which is
+  the only place the surface crosses itself. For log it's a spiral ramp. The floor is a polar mesh whose
+  seam always points directly away from the camera (`src/floor.ts`). `floorHeight()` in `src/world.ts`
   computes the same height for everything that stands on the floor.
+- **Two views.** z's world is on the left. The outputs live on an ordinary plane, so they get their own
+  small view on the right, with a camera that follows them and zooms to fit.
 
 ## Publishing
 

@@ -273,6 +273,8 @@ async function main() {
   const exploreButton = getById<HTMLButtonElement>("exploreMode");
   const sheetCheckbox = getById<HTMLInputElement>("sheetColors");
   const liftSlider = getById<HTMLInputElement>("lift");
+  /** What to do with z when it's on a different sheet from the camera:  "fade", "solid", or "spot". */
+  const offSheetSelect = getById<HTMLSelectElement>("offSheet");
   /** Hide the floating eye when a demo puts it somewhere it would just be in the way. */
   let eyeHidden = false;
   const readout = getById("readout");
@@ -364,6 +366,8 @@ async function main() {
   document.querySelectorAll("button, input").forEach((element) =>
     element.addEventListener("click", () => (element as HTMLElement).blur())
   );
+  // A select keeps the arrow keys, which we need for walking.
+  offSheetSelect.addEventListener("change", () => offSheetSelect.blur());
 
   //
   // Movement
@@ -750,14 +754,14 @@ async function main() {
         toast(
           level == 0
             ? "Only the camera moved, and it went around the branch point, so it changed levels. That put it back on z's level: z is solid again."
-            : `Only the camera moved, but it went around the branch point, so it moved to a different level of the spiral. z is now ${Math.abs(level)} level${Math.abs(level) == 1 ? "" : "s"} ${level > 0 ? "above" : "below"} the camera's, so it faded${floorUniforms.uLift.value > 0 && level < 0 ? ", and with the 3D floor it's hidden under your feet" : ""}. The floor's colors moved half way around the rainbow. Go around the other way to get back.`,
+            : `Only the camera moved, but it went around the branch point, so it moved to a different level of the spiral. z is now ${Math.abs(level)} level${Math.abs(level) == 1 ? "" : "s"} ${level > 0 ? "above" : "below"} the camera's${floorUniforms.uLift.value > 0 && level < 0 ? ", and with the 3D floor it's hidden under your feet" : ""}. The floor's colors moved half way around the rainbow. Go around the other way to get back.`,
           13000
         );
       } else {
         toast(
           level == 0
             ? "Only the camera moved, and it went around the branch point, so it switched sheets. That put it back on z's sheet: z is solid again, and the floor's colors are back where they started."
-            : "Only the camera moved, but it went around the branch point, so now it's on the other sheet. The floor's colors flipped, and z faded out because it's not on this sheet. The square roots never fade: they live on an ordinary plane. Go around again to get back.",
+            : "Only the camera moved, but it went around the branch point, so now it's on the other sheet. The floor's colors flipped, and z isn't on this sheet any more. The square roots don't care: they live on an ordinary plane. Go around again to get back.",
           12000
         );
       }
@@ -796,7 +800,7 @@ async function main() {
       player,
       () =>
         toast(
-          "The camera never moved. The small loops stayed in front of the cloud, so z stayed on the camera's sheet. The first big loop took z behind the cloud, across the cut, onto the other sheet, so it faded. The next big loop brought it back. The square roots never fade: they live on an ordinary plane.",
+          "The camera never moved. The small loops stayed in front of the cloud, so z stayed on the camera's sheet. The first big loop took z behind the cloud, across the cut, onto the other sheet. The next big loop brought it back. The square roots don't care: they live on an ordinary plane.",
           14000
         ),
       false
@@ -924,7 +928,7 @@ async function main() {
       ],
       () =>
         toast(
-          `z walked a logarithmic spiral, but every value of log z walked a perfectly straight line. Each lap multiplied z's distance by ${Math.exp(growth * TAU).toFixed(2)}, which always adds the same amount to the real part, while the angle adds 2π to the imaginary part. z faded because each lap behind the cloud took it up a level from the camera's.`,
+          `z walked a logarithmic spiral, but every value of log z walked a perfectly straight line. Each lap multiplied z's distance by ${Math.exp(growth * TAU).toFixed(2)}, which always adds the same amount to the real part, while the angle adds 2π to the imaginary part. Each lap behind the cloud also took z up a level from the camera's.`,
           15000
         )
     );
@@ -990,7 +994,7 @@ async function main() {
       ],
       () =>
         toast(
-          "A spiral staircase! Each counterclockwise lap climbed one level, and each clockwise lap came back down one. The camera stayed on the ground floor, so z faded whenever it was on a different level. The levels connect behind the cloud, where you can't see the seam.",
+          "A spiral staircase! Each counterclockwise lap climbed one level, and each clockwise lap came back down one. The camera stayed on the ground floor while z went up and down. The levels connect behind the cloud, where you can't see the seam.",
           14000
         )
     );
@@ -1255,10 +1259,10 @@ async function main() {
   /** Put something on the floor, and tilt its shadow to match the floor. */
   const shadowNormal = new THREE.Vector3();
   const up = new THREE.Vector3(0, 1, 0);
-  function standOnFloor(root: THREE.Object3D, shadow: THREE.Object3D) {
+  function standOnFloor(root: THREE.Object3D, shadow: THREE.Object3D, level = 0) {
     const { x, z } = root.position;
-    root.position.y = floorHeight(x, z);
-    floorNormal(x, z, shadowNormal).applyAxisAngle(up, -root.rotation.y);
+    root.position.y = floorHeight(x, z, level);
+    floorNormal(x, z, level, shadowNormal).applyAxisAngle(up, -root.rotation.y);
     shadow.quaternion.setFromUnitVectors(up, shadowNormal);
   }
 
@@ -1273,7 +1277,6 @@ async function main() {
     u.uCameraAngle.value = Math.atan2(-camera.position.z, camera.position.x);
     u.uCameraTotal.value = fn.total(cameraW);
     u.uRelAngle.value = fn.relative(focus, cameraW);
-    u.uFocusTotal.value = fn.total(focus);
     const wanted = Number(liftSlider.value) * fn.maxLift;
     const lift = u.uLift.value + (wanted - u.uLift.value) * (1 - Math.exp(-dt * 6));
     u.uLift.value = Math.abs(lift - wanted) < 1e-4 ? wanted : lift;
@@ -1301,9 +1304,12 @@ async function main() {
       where = fn == LOGARITHM ? "z is on the camera's level" : "z is on the camera's sheet";
     } else if (fn == LOGARITHM) {
       const count = Math.abs(level) == 1 ? "1 level" : `${Math.abs(level)} levels`;
-      where = `z is ${count} ${level > 0 ? "above" : "below"} the camera's, so it's faded`;
+      where = `z is ${count} ${level > 0 ? "above" : "below"} the camera's`;
     } else {
-      where = "z is on the other sheet, so it's faded";
+      where = "z is on the other sheet";
+    }
+    if (level != 0 && offSheetSelect.value == "fade") {
+      where += ", so it's faded";
     }
     readout.innerHTML = `
       <table>
@@ -1463,7 +1469,7 @@ async function main() {
       maybeAddToTrail(cast.trails[i], w, undefined, outputSpace.scale);
     });
     cast.previous = outputs;
-    outputFloor.update(0, false);
+    outputFloor.update(0);
 
     toWorld(eye.z, 0, eyeMarker.root.position);
     eyeMarker.heading = eye.heading;
@@ -1486,20 +1492,32 @@ async function main() {
     cameraW = cameraValue();
     updateFloorShape(dt);
     sheetMix += ((sheetCheckbox.checked ? 1 : 0) - sheetMix) * (1 - Math.exp(-dt * 6));
-    // The see-through levels of the parking garage only make sense for log, and only in 3D.
-    floor.update(sheetMix, fn == LOGARITHM && floorUniforms.uLift.value > 0.02);
-
-    standOnFloor(zCharacter.root, zCharacter.shadow);
-    if (fn == LOGARITHM) {
-      // On the log spiral z might be on a different level.  Put it there, at its own height.
-      zCharacter.root.position.y =
-        floorUniforms.uLift.value * (fn.total(player.w) - floorUniforms.uFocusTotal.value);
+    // z stands on its own sheet.  With the 3D floor, that might be one of the see-through ones.
+    const zSheet = fn == LOGARITHM ? zLevel() : zOnCameraSheet() ? 0 : 1;
+    const offSheetStyle = offSheetSelect.value;
+    if (offSheetStyle == "spot" && zSheet > 0) {
+      floorUniforms.uSpot.value.set(zCharacter.root.position.x, zCharacter.root.position.z, 1.1);
+      floorUniforms.uSpotLevel.value = zSheet;
+    } else {
+      floorUniforms.uSpotLevel.value = -1;
     }
+    // The other sheets are see-through.  They fade in as the 3D floor separates them from this one.
+    floor.update(sheetMix, {
+      count: fn == LOGARITHM ? 3 : 1,
+      fill: THREE.MathUtils.clamp(floorUniforms.uLift.value / (0.08 * fn.maxLift), 0, 1),
+      // log's levels flatten out and just stack up far from the branch point.  √'s other sheet is
+      // a ceiling that you can see all the way out.
+      fade: fn == LOGARITHM ? [16, 36] : [40, 110],
+      // √'s other sheet covers everything, so it's mostly just grid lines.
+      base: fn == LOGARITHM ? 0.16 : 0.07,
+    });
+
+    standOnFloor(zCharacter.root, zCharacter.shadow, zSheet);
     standOnFloor(eyeMarker.root, eyeMarker.shadow);
     clickRing.position.y = floorHeight(clickRing.position.x, clickRing.position.z) + 0.04;
 
-    // z fades when it's on the other sheet from the camera.  The outputs never fade.
-    zCharacter.setOpacity(zOnCameraSheet() ? 1 : OFF_SHEET_OPACITY);
+    // z might fade when it's on the other sheet from the camera.  The outputs never fade.
+    zCharacter.setOpacity(zSheet == 0 || offSheetStyle != "fade" ? 1 : OFF_SHEET_OPACITY);
 
     branchPoint.update(dt, time, floorHeight);
     updateReadout();
@@ -1538,6 +1556,7 @@ async function main() {
     zOnCameraSheet,
     zLevel,
     busy: () => autopilot !== undefined,
+    zHeight: () => zCharacter.root.position.y,
     zoomBy,
   };
 }

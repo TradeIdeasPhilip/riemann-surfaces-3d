@@ -42,22 +42,23 @@ void main() {
   // Never let the trail get thinner than a few pixels, so it's still visible from far away.
   float grow = max(1.0, 0.005 * distance(cameraPosition, world.xyz) / uWidth);
   world.xz += side * grow;
-  vOnSheet = 1.0;
-  // Usually ride on top of the 3D floor.
-  float height = floorHeight(world.xz);
+  // Usually ride on top of the 3D floor, the camera's sheet.
+  float phi = cameraRelativeAngle(world.xz);
+  float level = 0.0;
   if (uFadeOffSheet > 0.5) {
-    // Is this part of the path on the camera's sheet?
-    float cameraTotal = uCameraTotal + cameraRelativeAngle(world.xz);
+    // Which sheet is this part of the path on?
+    float cameraTotal = uCameraTotal + phi;
     if (uFunction < 0.5) {
       // √:  Is it the same square root as the camera's, or the other one?
-      vOnSheet = cos(atan(lift.y, lift.x) - cameraTotal * 0.5) >= 0.0 ? 1.0 : 0.0;
+      level = cos(atan(lift.y, lift.x) - cameraTotal * 0.5) >= 0.0 ? 0.0 : 1.0;
     } else {
-      // log:  How many levels away is it?  And put it at its own height on the spiral.
-      vOnSheet = abs(lift.y - cameraTotal) < F_PI ? 1.0 : 0.0;
-      height = uLift * (lift.y - uFocusTotal);
+      // log:  How many levels away is it?
+      level = floor((lift.y - cameraTotal) / F_TAU + 0.5);
     }
   }
-  world.y += height;
+  vOnSheet = level == 0.0 ? 1.0 : 0.0;
+  // Ride on the sheet it's on.
+  world.y += floorHeightAt(phi, level);
   vWorld = world.xyz;
   vAcross = across;
   gl_Position = projectionMatrix * viewMatrix * world;

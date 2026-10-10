@@ -50,7 +50,8 @@ export const SQUARE_ROOT: MultiFunction = {
   id: "sqrt",
   name: "√z",
   shaderId: 0,
-  maxLift: 1.2,
+  // For √ this is the height of the other sheet, right above the camera's subject.
+  maxLift: 10,
   principal: sqrtPrincipal,
   continueTo: sqrtNear,
   outputs: (w) => [w, negate(w)],

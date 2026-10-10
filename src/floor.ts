@@ -32,7 +32,7 @@ void main() {
   float phi = position.y;
   // Math angle, counterclockwise from Re.
   float angle = uCameraAngle + phi;
-  float height = floorHeightAt(r, uRelAngle + phi + F_TAU * uLevel);
+  float height = floorHeightAt(phi, uLevel);
   vWorld = vec3(r * cos(angle), height, -r * sin(angle));
   gl_Position = projectionMatrix * viewMatrix * vec4(vWorld, 1.0);
 }
@@ -43,6 +43,14 @@ ${floorHeightGlsl}
 uniform float uLevel;
 /** 1 for the see-through levels above and below the camera's. */
 uniform float uGhost;
+/** For the see-through levels.  0 hides everything but the spot.  See uSpot. */
+uniform float uGhostFill;
+/** The see-through levels fade out between these distances from the branch point, in world units. */
+uniform vec2 uGhostFade;
+/** How solid the see-through levels are, not counting the grid lines. */
+uniform float uGhostBase;
+uniform vec3 uSpot;
+uniform float uSpotLevel;
 uniform float uScale;
 /** The math point at the world's origin.  See Space. */
 uniform vec2 uCenter;
@@ -118,11 +126,16 @@ void main() {
 
   // The other levels are mostly see-through, with the grid lines showing more.  Far from the
   // branch point they're nearly flat and just stack up like plain floors, so fade them out there.
-  // What's left is the spiral ramp around the cloud.
   float alpha = 1.0;
   if (uGhost > 0.5) {
-    alpha = 0.16 + max(minor * 0.15, max(major * 0.45, axes * 0.6));
-    alpha *= 1.0 - smoothstep(16.0, 36.0, d);
+    alpha = uGhostBase + max(minor * 0.15, max(major * 0.45, axes * 0.6));
+    alpha *= (1.0 - smoothstep(uGhostFade.x, uGhostFade.y, d)) * uGhostFill;
+    if (abs(uLevel - uSpotLevel) < 0.5) {
+      // A solid patch of this level, for z to stand on.
+      float fromSpot = distance(vWorld.xz, uSpot.xy);
+      float edge = fwidth(fromSpot);
+      alpha = max(alpha, 1.0 - smoothstep(uSpot.z - edge, uSpot.z, fromSpot));
+    }
   }
 
   float dist = distance(vWorld, cameraPosition);
@@ -181,6 +194,9 @@ function floorMaterial(level: number, shared: FloorUniforms, glow: boolean) {
       ...shared,
       uLevel: { value: level },
       uGhost: { value: ghost ? 1 : 0 },
+      uGhostFill: { value: 1 },
+      uGhostFade: { value: new THREE.Vector2(16, 36) },
+      uGhostBase: { value: 0.16 },
       uGlow: { value: glow ? 1 : 0 },
       uCenter: { value: new THREE.Vector2() },
       uScale: { value: 1 },
@@ -197,6 +213,10 @@ function floorMaterial(level: number, shared: FloorUniforms, glow: boolean) {
     side: THREE.DoubleSide,
     transparent: ghost,
     depthWrite: !ghost,
+    // With a flat floor, the other levels are in the same place as this one.  Draw them on top.
+    polygonOffset: ghost,
+    polygonOffsetFactor: -1,
+    polygonOffsetUnits: -4,
   });
 }
 
@@ -244,10 +264,15 @@ export class Floor {
     }
   }
 
-  /** showLevels says whether to draw the see-through levels above the camera's. */
-  update(sheetMix: number, showLevels: boolean) {
+  /**
+   * The see-through levels above the camera's:  how many to draw (for log, or 1 for the other sheet of
+   * √), how solid they are (0 to 1), and where they fade out.  With fill 0, a level only shows up if it
+   * has the spot under z.  See uSpot.
+   */
+  update(sheetMix: number, levels = { count: 0, fill: 0, fade: [16, 36], base: 0.16 }) {
     const { scale, center } = this.space;
     const { major, minor } = gridSpacing(scale);
+    const spotLevel = floorUniforms.uSpotLevel.value;
     this.meshes.forEach((mesh, level) => {
       const u = mesh.material.uniforms;
       u.uScale.value = scale;
@@ -255,7 +280,11 @@ export class Floor {
       u.uMajor.value = major;
       u.uMinor.value = minor;
       u.uSheetMix.value = sheetMix;
-      mesh.visible = level == 0 || showLevels;
+      u.uGhostFill.value = levels.fill;
+      u.uGhostFade.value.set(levels.fade[0], levels.fade[1]);
+      u.uGhostBase.value = levels.base;
+      mesh.visible =
+        level == 0 || (level <= levels.count && (levels.fill > 0 || level == spotLevel));
     });
     const key = `${scale} ${center.re} ${center.im}`;
     if (key != this.labelKey) {

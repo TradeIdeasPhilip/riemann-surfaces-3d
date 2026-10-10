@@ -65,16 +65,18 @@ export const MY_RAINBOW = [
 ];
 
 /**
- * Everything about the floor is measured by a "total angle", τ:  how far z has turned around the
- * branch point, counting full turns, relative to whatever the camera is following.  On the camera's
- * sheet, τ at any point is uRelAngle plus that point's angle from the camera's direction, which is
- * between -π and π.  The cut is where that angle jumps, directly behind the branch point.
+ * Everything about the floor is measured by angles around the branch point.  φ is a point's angle
+ * measured from the camera's direction, between -π and π.  The cut is where φ jumps, directly behind
+ * the branch point.  The "total angle" counts full turns too:  on the camera's sheet it's
+ * uCameraTotal + φ.  It picks the colors.
  *
- * The 3D floor is the Riemann surface itself.  The height is
- *   √:   lift × Im(√z) relative to √ at the camera's subject = lift × √r × sin(τ/2)
- *   log: lift × τ, a spiral ramp, like a parking garage.
- * Either way it's level under the camera's subject, rises on the right as it goes behind the branch
- * point, and falls on the left.  The two edges meet behind the cloud, at different heights.
+ * The 3D floor is the Riemann surface itself, embedded in 3D.  "level" is which sheet:  0 is the
+ * camera's sheet, the opaque floor.  The others are drawn see-through.
+ *   √:   Two sheets.  The camera's sheet is a valley, level under the camera's subject, rising on both
+ *        sides toward the cut.  The other sheet is a ceiling, coming down on both sides.  They meet at
+ *        half height, at the cut.  That's where the two sheets cross, and it's always hidden behind
+ *        the cloud, so everything you can see is embedded in 3D without crossing itself.
+ *   log: A spiral ramp, like a parking garage.  Each level is one full turn higher.
  *
  * floorUniforms are shared by every shader that draws on the input's floor, and by floorHeight().
  */
@@ -90,8 +92,13 @@ export function makeFloorUniforms() {
     uCameraTotal: { value: 0 },
     /** The camera's total angle minus its subject's.  Always between -π and π. */
     uRelAngle: { value: 0 },
-    /** The total angle of the camera's subject.  For putting z's trail at its own height. */
-    uFocusTotal: { value: 0 },
+    /**
+     * Show the see-through level uSpotLevel as solid in a small circle, under z.
+     * x and y are the world x and z of the middle, and z is the radius.
+     */
+    uSpot: { value: new THREE.Vector3() },
+    /** -1 for no spot. */
+    uSpotLevel: { value: -1 },
   };
 }
 export type FloorUniforms = ReturnType<typeof makeFloorUniforms>;
@@ -102,26 +109,33 @@ export function cameraRelativeAngle(x: number, worldZ: number) {
   return wrapAngle(Math.atan2(-worldZ, x) - floorUniforms.uCameraAngle.value);
 }
 
-/** Height of the floor at this point, in world units.  This matches the floor and trail shaders. */
-export function floorHeight(x: number, worldZ: number) {
+/**
+ * Height of the floor at this point, in world units.  This matches floorHeightAt() in the shaders.
+ * level 0 is the camera's sheet.
+ */
+export function floorHeight(x: number, worldZ: number, level = 0) {
   const u = floorUniforms;
   const lift = u.uLift.value;
   if (lift == 0) {
     return 0;
   }
-  const tau = u.uRelAngle.value + cameraRelativeAngle(x, worldZ);
+  const phi = cameraRelativeAngle(x, worldZ);
   if (u.uFunction.value == 0) {
-    return lift * Math.sqrt(Math.hypot(x, worldZ)) * Math.sin(tau / 2);
+    // The camera's subject is at the bottom of the valley.
+    const subject = -u.uRelAngle.value;
+    const s = phi >= subject ? (phi - subject) / (Math.PI - subject) : (subject - phi) / (Math.PI + subject);
+    const rise = 0.5 * lift * s * s;
+    return level == 0 ? rise : lift - rise;
   } else {
-    return lift * tau;
+    return lift * (phi + u.uRelAngle.value + 2 * Math.PI * level);
   }
 }
 
 /** The floor's surface normal, for tilting shadows. */
-export function floorNormal(x: number, worldZ: number, target = new THREE.Vector3()) {
+export function floorNormal(x: number, worldZ: number, level = 0, target = new THREE.Vector3()) {
   const e = 0.05;
-  const dx = (floorHeight(x + e, worldZ) - floorHeight(x - e, worldZ)) / (2 * e);
-  const dz = (floorHeight(x, worldZ + e) - floorHeight(x, worldZ - e)) / (2 * e);
+  const dx = (floorHeight(x + e, worldZ, level) - floorHeight(x - e, worldZ, level)) / (2 * e);
+  const dz = (floorHeight(x, worldZ + e, level) - floorHeight(x, worldZ - e, level)) / (2 * e);
   return target.set(-dx, 1, -dz).normalize();
 }
 
@@ -132,7 +146,6 @@ uniform float uLift;
 uniform float uCameraAngle;
 uniform float uCameraTotal;
 uniform float uRelAngle;
-uniform float uFocusTotal;
 const float F_PI = 3.14159265358979;
 const float F_TAU = 6.28318530717959;
 float wrapAngle(float a) {
@@ -141,15 +154,19 @@ float wrapAngle(float a) {
 float cameraRelativeAngle(vec2 worldXZ) {
   return wrapAngle(atan(-worldXZ.y, worldXZ.x) - uCameraAngle);
 }
-/** r is the distance from the branch point in world units.  tau is relative to the camera's subject. */
-float floorHeightAt(float r, float tau) {
+/** phi is measured from the camera's direction.  level 0 is the camera's sheet. */
+float floorHeightAt(float phi, float level) {
   if (uFunction < 0.5) {
-    return uLift * sqrt(r) * sin(tau * 0.5);
+    // The camera's subject is at the bottom of the valley.
+    float subject = -uRelAngle;
+    float s = phi >= subject ? (phi - subject) / (F_PI - subject) : (subject - phi) / (F_PI + subject);
+    float rise = 0.5 * uLift * s * s;
+    return level < 0.5 ? rise : uLift - rise;
   }
-  return uLift * tau;
+  return uLift * (phi + uRelAngle + F_TAU * level);
 }
 float floorHeight(vec2 worldXZ) {
-  return floorHeightAt(length(worldXZ), uRelAngle + cameraRelativeAngle(worldXZ));
+  return floorHeightAt(cameraRelativeAngle(worldXZ), 0.0);
 }
 `;
 
