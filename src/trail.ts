@@ -16,7 +16,7 @@ const MAX_POINTS = 20000;
 /** How solid z looks when it's on the other sheet from the camera. */
 export const OFF_SHEET_OPACITY = 0.25;
 /** The trail is thinner than z, so it needs a little more to stay visible. */
-const OFF_SHEET_TRAIL_OPACITY = 0.4;
+export const OFF_SHEET_TRAIL_OPACITY = 0.4;
 
 type TrailPoint = { z: Complex; w?: Complex };
 
@@ -67,6 +67,8 @@ void main() {
 
 const fragmentShader = /* glsl */ `
 uniform vec3 uColor;
+/** How solid the parts of the trail on other sheets are. */
+uniform float uOffSheetAlpha;
 uniform vec3 uFogColor;
 uniform float uFogDensity;
 varying vec3 vWorld;
@@ -80,7 +82,7 @@ void main() {
   vec3 color = mix(vec3(0.03, 0.04, 0.07), uColor, inside);
   float dist = distance(vWorld, cameraPosition);
   float fog = 1.0 - exp(-uFogDensity * uFogDensity * dist * dist);
-  gl_FragColor = vec4(mix(color, uFogColor, fog), vOnSheet > 0.5 ? 1.0 : ${OFF_SHEET_TRAIL_OPACITY.toFixed(3)});
+  gl_FragColor = vec4(mix(color, uFogColor, fog), vOnSheet > 0.5 ? 1.0 : uOffSheetAlpha);
 }
 `;
 
@@ -149,6 +151,7 @@ export class Trail {
           ...(options.uniforms ?? floorUniforms),
           uColor: { value: shaderColor(color) },
           uFadeOffSheet: { value: fadeOffSheet ? 1 : 0 },
+          uOffSheetAlpha: { value: OFF_SHEET_TRAIL_OPACITY },
           uWidth: { value: width },
           uScale: { value: 1 },
           uCenter: { value: new THREE.Vector2() },
@@ -164,6 +167,11 @@ export class Trail {
     );
     this.mesh.position.y = y;
     this.mesh.frustumCulled = false;
+  }
+
+  /** How solid the parts of the trail on other sheets are.  Only for trails with fadeOffSheet. */
+  setOffSheetOpacity(opacity: number) {
+    this.mesh.material.uniforms.uOffSheetAlpha.value = opacity;
   }
 
   get last(): Complex | undefined {

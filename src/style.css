@@ -326,6 +326,72 @@ kbd {
   opacity: 1;
 }
 
+#demoStatus {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  min-width: 240px;
+  max-width: calc(100% - 24px);
+  padding: 8px 10px 9px;
+  border-radius: 10px;
+  background: rgba(14, 18, 32, 0.8);
+  border: 1px solid var(--border);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+#demoStatus[hidden] {
+  display: none;
+}
+
+#demoStatus .line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+#demoStatus .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--z);
+  animation: pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  50% {
+    opacity: 0.25;
+  }
+}
+
+#demoName {
+  font-weight: 600;
+  flex: 1;
+}
+
+#demoTime {
+  color: var(--muted);
+}
+
+#demoStop {
+  padding: 2px 8px;
+  font-size: 12px;
+}
+
+#demoStatus .bar {
+  margin-top: 7px;
+  height: 3px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.1);
+  overflow: hidden;
+}
+
+#demoBar {
+  height: 100%;
+  width: 0;
+  background: var(--accent);
+}
+
 /* On a narrow screen, stack everything instead. */
 @media (max-width: 760px) {
   html,

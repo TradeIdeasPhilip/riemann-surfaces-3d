@@ -15,6 +15,16 @@
       <main id="mainView">
         <canvas id="scene"></canvas>
         <div id="toast"></div>
+        <!-- Shows up while a demo is running. -->
+        <div id="demoStatus" hidden>
+          <div class="line">
+            <span class="dot"></span>
+            <span id="demoName"></span>
+            <span id="demoTime"></span>
+            <button id="demoStop" title="Shortcut: Esc">Stop</button>
+          </div>
+          <div class="bar"><div id="demoBar"></div></div>
+        </div>
       </main>
 
       <aside id="side">
@@ -38,6 +48,7 @@
               <button id="demoSpiral" class="demo">Spiral</button>
               <button id="demoCamera" class="demo">Walk the camera around it</button>
               <button id="demoSpiralStill" class="demo">Spiral, camera standing still</button>
+              <button id="demoSurfaceTour" class="demo">Surface tour (3D)</button>
             </div>
             <div id="logDemos" class="demos" hidden>
               <button id="demoLogCircles" class="demo">Circles at 2, 4, and 6</button>

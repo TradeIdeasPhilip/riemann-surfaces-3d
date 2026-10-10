@@ -14,7 +14,7 @@ import {
 } from "./complex";
 import { Floor } from "./floor";
 import { LOGARITHM, SQUARE_ROOT, type MultiFunction } from "./functions";
-import { OFF_SHEET_OPACITY, Trail } from "./trail";
+import { OFF_SHEET_OPACITY, OFF_SHEET_TRAIL_OPACITY, Trail } from "./trail";
 import {
   BLOCK_RADIUS,
   CAMERA_BLOCK_RADIUS,
@@ -406,8 +406,18 @@ async function main() {
     onDone?: () => void;
     /** Demos move the camera somewhere with a better view. */
     framing?: CameraFraming;
+    /** About how many seconds are left.  For the demo countdown. */
+    remaining?(): number;
+    /** Demos have a name.  The countdown shows up while a demo is running. */
+    title?: string;
   };
   let autopilot: Autopilot | undefined;
+
+  /** Mark an autopilot as a demo, so the countdown shows up while it runs. */
+  function asDemo(pilot: Autopilot, title: string) {
+    pilot.title = title;
+    return pilot;
+  }
 
   /**
    * Turn toward a direction (in math coordinates) and walk.
@@ -455,6 +465,7 @@ async function main() {
         const direction = { re: -out.im - out.re * error * 4, im: out.re - out.im * error * 4 };
         return walkToward(body, direction, speed, dt);
       },
+      remaining: () => (Math.max(0, Math.PI * 2 - swept) * radius * view.scale) / speed,
       onDone,
     };
   }
@@ -520,6 +531,16 @@ async function main() {
       length += Math.PI * (radii[i] + radii[i + 1]) * scale;
     }
     const topSpeed = THREE.MathUtils.clamp(length / 36, 6, 200);
+    /** Slow down in the tight curls near the middle.  r is in world units. */
+    const speedAt = (r: number) => topSpeed * THREE.MathUtils.clamp(r / 3, 0.3, 1);
+    // How long it takes to reach each angle, for the countdown.  Same speed rule as step().
+    const samples = 2000;
+    const timeAt = [0];
+    for (let i = 1; i <= samples; i++) {
+      const t = (lastTheta * (i - 0.5)) / samples;
+      const worldPerRadian = Math.max(0.5, abs(tangent(t)) * scale);
+      timeAt.push(timeAt[i - 1] + ((lastTheta / samples) * worldPerRadian) / speedAt(radius(t).r * scale));
+    }
     const framing = { pitch: 0.85, distance: 20, yawOffset: 1.2 };
     let theta = 0;
     return {
@@ -530,8 +551,7 @@ async function main() {
           return undefined;
         }
         const r = radius(theta).r * view.scale;
-        // Slow down in the tight curls near the middle.
-        const speed = topSpeed * THREE.MathUtils.clamp(r / 3, 0.3, 1);
+        const speed = speedAt(r);
         const worldPerRadian = Math.max(0.5, abs(tangent(theta)) * view.scale);
         theta = Math.min(lastTheta, theta + (speed * dt) / worldPerRadian);
         // Aim at the point on the path, not just the next step, so we can't drift off of it.
@@ -544,6 +564,8 @@ async function main() {
         framing.distance = THREE.MathUtils.clamp(18 + r * 0.9, 20, 55);
         return speed;
       },
+      remaining: () =>
+        timeAt[samples] - timeAt[Math.min(samples, Math.floor((theta / lastTheta) * samples))],
       onDone,
     };
   }
@@ -572,6 +594,8 @@ async function main() {
         const direction = steer();
         return direction && walkToward(body, direction, WALK_SPEED * 1.4, dt);
       },
+      // This ignores walking around the branch point, so it's a little optimistic.
+      remaining: () => (abs(sub(target, body.z)) * view.scale) / (WALK_SPEED * 1.4),
     };
   }
 
@@ -586,6 +610,18 @@ async function main() {
     return speed;
   }
 
+  /** The length of a path, in world units. */
+  function pathLength(path: (u: number) => Complex, scale = view.scale) {
+    let length = 0;
+    let previous = path(0);
+    for (let i = 1; i <= 400; i++) {
+      const next = path(i / 400);
+      length += abs(sub(next, previous));
+      previous = next;
+    }
+    return length * scale;
+  }
+
   /**
    * Follow a path exactly, at a steady speed in world units per second.
    * path(0) should be where the body is now.  The path is in math coordinates.
@@ -597,6 +633,7 @@ async function main() {
     framing?: CameraFraming
   ): Autopilot {
     let u = 0;
+    const length = pathLength(path);
     return {
       body,
       framing,
@@ -617,17 +654,44 @@ async function main() {
         body.heading = turnToward(body.heading, headingToward(direction.re, -direction.im), 8 * dt);
         return speed;
       },
+      remaining: () => ((1 - u) * length) / speed,
+    };
+  }
+
+  /**
+   * One step of a demo.  start() makes the autopilot when the step starts, so it can start wherever
+   * the last step ended.  plan() guesses how long the step takes, and where it ends, so the countdown
+   * can count the steps that haven't started yet.
+   */
+  type Step = {
+    start(): Autopilot;
+    plan(from: Complex): { seconds: number; end: Complex };
+  };
+
+  /** Walk to a point, around the branch point if necessary. */
+  function walkTo(body: Body, target: Complex): Step {
+    return {
+      start: () => gotoAutopilot(body, target),
+      // Plus a moment to turn around.
+      plan: (from) => ({
+        seconds: (abs(sub(target, from)) * view.scale) / (WALK_SPEED * 1.4) + 0.5,
+        end: target,
+      }),
     };
   }
 
   /** A straight line from wherever the body is when this step starts. */
-  function lineTo(body: Body, to: Complex, speed = 8) {
-    return () => {
-      const from = body.z;
-      return pathAutopilot(body, (u) => ({
-        re: from.re + (to.re - from.re) * u,
-        im: from.im + (to.im - from.im) * u,
-      }), speed);
+  function lineTo(body: Body, to: Complex, speed = 8): Step {
+    return {
+      start() {
+        const from = body.z;
+        return pathAutopilot(
+          body,
+          (u) => ({ re: from.re + (to.re - from.re) * u, im: from.im + (to.im - from.im) * u }),
+          speed
+        );
+      },
+      plan: (from) => ({ seconds: (abs(sub(to, from)) * view.scale) / speed, end: to }),
     };
   }
 
@@ -635,44 +699,107 @@ async function main() {
    * Circle the branch point at a fixed distance, from wherever the body is when this step starts,
    * turning by angle radians.  Positive is counterclockwise.  The camera looks toward the middle.
    */
-  function arcAround(body: Body, angle: number, speed: number, followWithCamera = true) {
-    return () => {
-      const r = abs(body.z);
-      const start = arg(body.z);
-      const framing = followWithCamera
-        ? {
-            pitch: 0.8,
-            distance: THREE.MathUtils.clamp(12 + r * view.scale * 0.9, 20, 45),
-            yawOffset: angle > 0 ? 1.15 : -1.15,
-          }
-        : undefined;
-      return pathAutopilot(body, (u) => polar(r, start + angle * u), speed, framing);
-    };
-  }
-
-  /** Stand still for a moment. */
-  function pause(body: Body, seconds: number) {
-    return (): Autopilot => {
-      let remaining = seconds;
-      return {
-        body,
-        step(dt) {
-          remaining -= dt;
-          return remaining > 0 ? 0 : undefined;
-        },
-      };
-    };
-  }
-
-  /** Do one step after another.  Each step is created when it starts, so it can start where the last one ended. */
-  function sequence(body: Body, steps: (() => Autopilot)[], onDone?: () => void): Autopilot {
-    let index = 0;
-    let current = steps[0]();
+  function arcAround(body: Body, angle: number, speed: number, followWithCamera = true): Step {
     return {
-      body,
+      start() {
+        const r = abs(body.z);
+        const start = arg(body.z);
+        const framing = followWithCamera
+          ? {
+              pitch: 0.8,
+              distance: THREE.MathUtils.clamp(12 + r * view.scale * 0.9, 20, 45),
+              yawOffset: angle > 0 ? 1.15 : -1.15,
+            }
+          : undefined;
+        return pathAutopilot(body, (u) => polar(r, start + angle * u), speed, framing);
+      },
+      plan: (from) => ({
+        seconds: (Math.abs(angle) * abs(from) * view.scale) / speed,
+        end: polar(abs(from), arg(from) + angle),
+      }),
+    };
+  }
+
+  /** Stand still for a moment.  update(t) is called every frame, with t in seconds. */
+  function pause(body: Body, seconds: number, update?: (t: number) => void): Step {
+    return {
+      start(): Autopilot {
+        let t = 0;
+        return {
+          body,
+          step(dt) {
+            t += dt;
+            update?.(Math.min(t, seconds));
+            return t < seconds ? 0 : undefined;
+          },
+          remaining: () => Math.max(0, seconds - t),
+        };
+      },
+      plan: (from) => ({ seconds, end: from }),
+    };
+  }
+
+  /** Do something just before the step starts. */
+  function before(setup: () => void, step: Step): Step {
+    return {
+      start() {
+        setup();
+        return step.start();
+      },
+      plan: step.plan,
+    };
+  }
+
+  /** Move the camera during a step.  camera(t) says where it should be, t seconds into the step. */
+  function withCamera(step: Step, camera: (t: number) => CameraFraming): Step {
+    return {
+      start(): Autopilot {
+        const inner = step.start();
+        let t = 0;
+        return {
+          get body() {
+            return inner.body;
+          },
+          get framing() {
+            return camera(t);
+          },
+          step(dt) {
+            t += dt;
+            return inner.step(dt);
+          },
+          remaining: () => inner.remaining?.() ?? 0,
+        };
+      },
+      plan: step.plan,
+    };
+  }
+
+  /** Do one step after another. */
+  function sequence(body: Body, steps: Step[], onDone?: () => void): Autopilot {
+    // Guess how long each step will take, for the countdown.
+    const planned: number[] = [];
+    let where = body.z;
+    for (const step of steps) {
+      const { seconds, end } = step.plan(where);
+      planned.push(seconds);
+      where = end;
+    }
+    let index = 0;
+    let current = steps[0].start();
+    return {
+      get body() {
+        return current.body;
+      },
       onDone,
       get framing() {
         return current.framing;
+      },
+      remaining() {
+        let total = current.remaining?.() ?? planned[index];
+        for (let i = index + 1; i < planned.length; i++) {
+          total += planned[i];
+        }
+        return total;
       },
       step(dt) {
         for (;;) {
@@ -684,7 +811,7 @@ async function main() {
           if (index >= steps.length) {
             return undefined;
           }
-          current = steps[index]();
+          current = steps[index].start();
         }
       },
     };
@@ -717,11 +844,14 @@ async function main() {
     setMode("walk");
     clearTrails();
     const radius = Math.max(abs(player.z), (BLOCK_RADIUS + 2) / view.scale);
-    autopilot = circleAutopilot(player, complex(0, 0), radius, () =>
-      toast(
-        "One lap around the branch point. z is back where it started, but the two square roots traded places! Go around again and they trade back.",
-        9000
-      )
+    autopilot = asDemo(
+      circleAutopilot(player, complex(0, 0), radius, () =>
+        toast(
+          "One lap around the branch point. z is back where it started, but the two square roots traded places! Go around again and they trade back.",
+          9000
+        )
+      ),
+      "Walk z around the branch point"
     );
   }
   function demoMiss() {
@@ -731,45 +861,54 @@ async function main() {
     const radius = 6 / view.scale;
     const out = normalize(player.z);
     const center = { re: player.z.re + out.re * radius, im: player.z.im + out.im * radius };
-    autopilot = circleAutopilot(player, center, radius, () =>
-      toast(
-        "That loop didn't go around the branch point, so each square root came back to where it started.",
-        8000
-      )
+    autopilot = asDemo(
+      circleAutopilot(player, center, radius, () =>
+        toast(
+          "That loop didn't go around the branch point, so each square root came back to where it started.",
+          8000
+        )
+      ),
+      "Walk a loop that misses it"
     );
   }
   function demoSpiral() {
     setMode("walk");
     clearTrails();
-    autopilot = spiralAutopilot(player, () =>
-      toast(
-        "The first two loops were too small to go around the branch point, so each square root just traced a little spiral of its own. Once the loops were big enough to go around it, each lap carried the roots half way around.",
-        11000
-      )
+    autopilot = asDemo(
+      spiralAutopilot(player, () =>
+        toast(
+          "The first two loops were too small to go around the branch point, so each square root just traced a little spiral of its own. Once the loops were big enough to go around it, each lap carried the roots half way around.",
+          11000
+        )
+      ),
+      "Spiral"
     );
   }
   function demoCamera() {
     setMode("explore");
     sheetCheckbox.checked = true;
     const radius = Math.max(abs(eye.z), (BLOCK_RADIUS + 2) / view.scale);
-    autopilot = circleAutopilot(eye, complex(0, 0), radius, () => {
-      const level = zLevel();
-      if (fn == LOGARITHM) {
-        toast(
-          level == 0
-            ? "Only the camera moved, and it went around the branch point, so it changed levels. That put it back on z's level: z is solid again."
-            : `Only the camera moved, but it went around the branch point, so it moved to a different level of the spiral. z is now ${Math.abs(level)} level${Math.abs(level) == 1 ? "" : "s"} ${level > 0 ? "above" : "below"} the camera's${floorUniforms.uLift.value > 0 && level < 0 ? ", and with the 3D floor it's hidden under your feet" : ""}. The floor's colors moved half way around the rainbow. Go around the other way to get back.`,
-          13000
-        );
-      } else {
-        toast(
-          level == 0
-            ? "Only the camera moved, and it went around the branch point, so it switched sheets. That put it back on z's sheet: z is solid again, and the floor's colors are back where they started."
-            : "Only the camera moved, but it went around the branch point, so now it's on the other sheet. The floor's colors flipped, and z isn't on this sheet any more. The square roots don't care: they live on an ordinary plane. Go around again to get back.",
-          12000
-        );
-      }
-    });
+    autopilot = asDemo(
+      circleAutopilot(eye, complex(0, 0), radius, () => {
+        const level = zLevel();
+        if (fn == LOGARITHM) {
+          toast(
+            level == 0
+              ? "Only the camera moved, and it went around the branch point, so it changed levels. That put it back on z's level: z is solid again."
+              : `Only the camera moved, but it went around the branch point, so it moved to a different level of the spiral. z is now ${Math.abs(level)} level${Math.abs(level) == 1 ? "" : "s"} ${level > 0 ? "above" : "below"} the camera's${floorUniforms.uLift.value > 0 && level < 0 ? ", and with the 3D floor it's hidden under your feet" : ""}. The floor's colors moved half way around the rainbow. Go around the other way to get back.`,
+            13000
+          );
+        } else {
+          toast(
+            level == 0
+              ? "Only the camera moved, and it went around the branch point, so it switched sheets. That put it back on z's sheet: z is solid again, and the floor's colors are back where they started."
+              : "Only the camera moved, but it went around the branch point, so now it's on the other sheet. The floor's colors flipped, and z isn't on this sheet any more. The square roots don't care: they live on an ordinary plane. Go around again to get back.",
+            12000
+          );
+        }
+      }),
+      "Walk the camera around it"
+    );
   }
   /**
    * The same spiral, but the camera stands still, off to one side, where it can see everything.
@@ -800,14 +939,130 @@ async function main() {
       0.8,
       THREE.MathUtils.clamp(outerRadius * 2.2, 25, 150)
     );
-    autopilot = spiralAutopilot(
-      player,
-      () =>
-        toast(
-          "The camera never moved. The small loops stayed in front of the cloud, so z stayed on the camera's sheet. The first big loop took z behind the cloud, across the cut, onto the other sheet. The next big loop brought it back. The square roots don't care: they live on an ordinary plane.",
-          14000
-        ),
-      false
+    autopilot = asDemo(
+      spiralAutopilot(
+        player,
+        () =>
+          toast(
+            "The camera never moved. The small loops stayed in front of the cloud, so z stayed on the camera's sheet. The first big loop took z behind the cloud, across the cut, onto the other sheet. The next big loop brought it back. The square roots don't care: they live on an ordinary plane.",
+            14000
+          ),
+        false
+      ),
+      "Spiral, camera standing still"
+    );
+  }
+
+  /**
+   * A tour of the whole √z surface, in 3D.
+   *   1. The floor rises into two sheets.
+   *   2. z walks a tight spiral around the branch point.  The camera watches from low and off to one
+   *      side, and keeps moving slowly, so the two grids slide past each other.  The camera stands
+   *      still otherwise, so each lap lands on the other sheet, and the trail maps out both of them.
+   *   3. The camera walks once around the branch point, looking in.  That puts it on the other sheet,
+   *      so the two sheets trade places.
+   *   4. The camera settles between the two sheets and looks around.
+   */
+  function demoSurfaceTour() {
+    const scale = START_SCALE;
+    // In world units.  The spiral starts just outside the cones.
+    const inner = BLOCK_RADIUS + 0.6;
+    const spacing = 2.4;
+    const laps = 5;
+    /** The camera looks at the branch point from this direction:  south, and a little west. */
+    const cameraAngle = -Math.PI / 2 - 0.5;
+    const spiralStart = cameraAngle + 0.35;
+    const spiral = (u: number) => {
+      const theta = u * laps * TAU;
+      return polar((inner + (spacing * theta) / TAU) / scale, spiralStart + theta);
+    };
+    const spiralSpeed = 15;
+    const orbitSeconds = 12;
+    const endSeconds = 11;
+    // Two low angles to drift between.
+    const high = { pitch: 0.45, distance: 28 };
+    const low = { pitch: 0.22, distance: 28 };
+    const orbit = { pitch: 0.38, distance: 30 };
+    const between = { pitch: 0.03, distance: 11 };
+    const smooth = THREE.MathUtils.smootherstep;
+
+    const setup = () => {
+      setMode("walk");
+      view.scale = targetScale = scale;
+      clearTrails();
+      sheetCheckbox.checked = true;
+      // The tour is all about where z and its trail are in 3D, so keep them solid on both sheets.
+      offSheetSelect.value = "solid";
+      // Start flat.
+      liftSlider.value = "0";
+      floorUniforms.uLift.value = 0;
+      player.z = spiral(0);
+      player.w = fn.principal(player.z);
+      const direction = sub(spiral(0.001), spiral(0));
+      player.heading = headingToward(direction.re, -direction.im);
+      cast.previous = fn.outputs(player.w);
+      snapOutputView = true;
+      parkCamera(polar(inner / scale, cameraAngle), polar(1, cameraAngle + Math.PI), high.pitch, high.distance);
+    };
+
+    /** The camera walks once around the branch point, looking in. */
+    const walkAround: Step = {
+      start() {
+        const r = abs(eye.z);
+        const start = arg(eye.z);
+        // Face along the circle, without moving the camera.
+        const tangent = headingToward(-Math.sin(start), -Math.cos(start));
+        cameraRig.yawOffset = wrapAngle(cameraRig.yawOffset + eye.heading - tangent);
+        eye.heading = tangent;
+        return pathAutopilot(eye, (u) => polar(r, start + TAU * u), (TAU * r * view.scale) / orbitSeconds);
+      },
+      plan: (from) => ({ seconds: orbitSeconds, end: from }),
+    };
+
+    autopilot = asDemo(
+      sequence(
+        player,
+        [
+          // 1. The floor rises, half way, in half a second.
+          before(
+            setup,
+            pause(player, 1.2, (t) => (liftSlider.value = String(0.5 * smooth(t, 0, 0.5))))
+          ),
+          // 2. The spiral.  The camera drifts from the higher angle to the lower one, then keeps swaying.
+          withCamera(
+            {
+              start: () => pathAutopilot(player, spiral, spiralSpeed),
+              plan: () => ({ seconds: pathLength(spiral, scale) / spiralSpeed, end: spiral(1) }),
+            },
+            (t) => ({
+              pitch:
+                high.pitch +
+                (low.pitch - high.pitch) * smooth(t, 0, 2) +
+                (0.1 * (1 - Math.cos((Math.max(0, t - 2) * TAU) / 14))) / 2,
+              distance: high.distance,
+              yawOffset: 0.3 * Math.sin((t * TAU) / 20),
+            })
+          ),
+          // 3. The camera walks around the branch point.  Looking in means looking left.
+          withCamera(walkAround, () => ({ ...orbit, yawOffset: Math.PI / 2 })),
+          // 4. Down between the two sheets, looking at where they meet behind the cloud.  Then turn
+          // right, to look along the sheets, toward z.
+          withCamera(pause(eye, endSeconds), (t) => {
+            const down = smooth(t, 0, 3);
+            return {
+              pitch: orbit.pitch + (between.pitch - orbit.pitch) * down,
+              distance: orbit.distance + (between.distance - orbit.distance) * down,
+              yawOffset: Math.PI / 2 - 1.75 * smooth(t, 4, endSeconds),
+            };
+          }),
+        ],
+        () =>
+          toast(
+            "That's the whole surface for √z: two sheets that only cross behind the cloud. Each lap of the spiral went around the branch point, so it landed on the other sheet. Then the camera went around, so the sheets traded places. Now you're between them. Drag to look around.",
+            14000
+          )
+      ),
+      "Surface tour (3D)"
     );
   }
   getById("demoCircle").addEventListener("click", demoCircle);
@@ -815,6 +1070,7 @@ async function main() {
   getById("demoSpiral").addEventListener("click", demoSpiral);
   getById("demoCamera").addEventListener("click", demoCamera);
   getById("demoSpiralStill").addEventListener("click", demoSpiralStillCamera);
+  getById("demoSurfaceTour").addEventListener("click", demoSurfaceTour);
 
   //
   // Log demos
@@ -833,21 +1089,24 @@ async function main() {
   function demoLogCircles() {
     setMode("walk");
     startLogDemo();
-    autopilot = sequence(
-      player,
-      [
-        () => gotoAutopilot(player, complex(2, 0)),
-        arcAround(player, TAU, 9),
-        lineTo(player, complex(4, 0)),
-        arcAround(player, TAU, 12),
-        lineTo(player, complex(6, 0)),
-        arcAround(player, -TAU, 15),
-      ],
-      () =>
-        toast(
-          "Each counterclockwise lap moved every value of log z up by 2π𝒾, and the clockwise lap moved them back down. Walking out from 2 to 4 to 6 moved them to the right, to ln 2, ln 4, and ln 6. Log turns polar coordinates into rectangular ones: the distance becomes the real part, and the angle becomes the imaginary part.",
-          14000
-        )
+    autopilot = asDemo(
+      sequence(
+        player,
+        [
+          walkTo(player, complex(2, 0)),
+          arcAround(player, TAU, 9),
+          lineTo(player, complex(4, 0)),
+          arcAround(player, TAU, 12),
+          lineTo(player, complex(6, 0)),
+          arcAround(player, -TAU, 15),
+        ],
+        () =>
+          toast(
+            "Each counterclockwise lap moved every value of log z up by 2π𝒾, and the clockwise lap moved them back down. Walking out from 2 to 4 to 6 moved them to the right, to ln 2, ln 4, and ln 6. Log turns polar coordinates into rectangular ones: the distance becomes the real part, and the angle becomes the imaginary part.",
+            14000
+          )
+      ),
+      "Circles at 2, 4, and 6"
     );
   }
 
@@ -859,45 +1118,47 @@ async function main() {
     setMode("walk");
     startLogDemo();
     const angle = Math.PI / 2;
-    autopilot = sequence(
-      player,
-      [
-        () => gotoAutopilot(player, polar(Math.E, angle)),
-        (): Autopilot => {
-          const startLn = Math.log(abs(player.z));
-          const endLn = -5;
-          const duration = 10;
-          let t = 0;
-          return {
-            body: player,
-            // Look across z's path, so we can see the values of log z run away.
-            framing: { pitch: 0.75, distance: 30, yawOffset: -Math.PI / 2 },
-            step(dt) {
-              if (t >= 1) {
-                return undefined;
-              }
-              t = Math.min(1, t + dt / duration);
-              const r = Math.exp(startLn + (endLn - startLn) * t);
-              // Zoom in just enough to keep z outside the forbidden zone.
-              view.scale = targetScale = Math.max(START_SCALE, (BLOCK_RADIUS + 2) / r);
-              player.z = polar(r, angle);
-              player.w = fn.continueTo(player.z, player.w);
-              player.heading = turnToward(
-                player.heading,
-                headingToward(-Math.cos(angle), Math.sin(angle)),
-                6 * dt
-              );
-              // Once the zoom takes over, z walks in place while the plane rushes past.
-              return 4;
-            },
-          };
-        },
-      ],
-      () =>
+    const duration = 10;
+    const endLn = -5;
+    const approach: Step = {
+      start(): Autopilot {
+        const startLn = Math.log(abs(player.z));
+        let t = 0;
+        return {
+          body: player,
+          // Look across z's path, so we can see the values of log z run away.
+          framing: { pitch: 0.75, distance: 30, yawOffset: -Math.PI / 2 },
+          step(dt) {
+            if (t >= 1) {
+              return undefined;
+            }
+            t = Math.min(1, t + dt / duration);
+            const r = Math.exp(startLn + (endLn - startLn) * t);
+            // Zoom in just enough to keep z outside the forbidden zone.
+            view.scale = targetScale = Math.max(START_SCALE, (BLOCK_RADIUS + 2) / r);
+            player.z = polar(r, angle);
+            player.w = fn.continueTo(player.z, player.w);
+            player.heading = turnToward(
+              player.heading,
+              headingToward(-Math.cos(angle), Math.sin(angle)),
+              6 * dt
+            );
+            // Once the zoom takes over, z walks in place while the plane rushes past.
+            return 4;
+          },
+          remaining: () => (1 - t) * duration,
+        };
+      },
+      plan: () => ({ seconds: duration, end: polar(Math.exp(endLn), angle) }),
+    };
+    autopilot = asDemo(
+      sequence(player, [walkTo(player, polar(Math.E, angle)), approach], () =>
         toast(
           "As z gets closer to the branch point, ln|z| heads to −∞, so every value of log z races off in the same direction. In complex analysis there's only one infinity, so if z could reach the branch point, all of the values would be the same: ∞. Scroll to zoom back out, or press Reset.",
           14000
         )
+      ),
+      "Walk toward the branch point"
     );
   }
 
@@ -912,29 +1173,35 @@ async function main() {
     const r1 = 8;
     const turns = 2;
     const growth = Math.log(r1 / r0) / (TAU * turns);
-    autopilot = sequence(
-      player,
-      [
-        () => gotoAutopilot(player, complex(r0, 0)),
-        () => {
-          // Look down from high above, to the south.
-          parkCamera(complex(0.8, -1.5), complex(0, 1), 0.95, 85);
-          clearTrails();
-          return pathAutopilot(
-            player,
-            (u) => {
-              const theta = u * turns * TAU;
-              return polar(r0 * Math.exp(growth * theta), theta);
+    const speed = 12;
+    const path = (u: number) => {
+      const theta = u * turns * TAU;
+      return polar(r0 * Math.exp(growth * theta), theta);
+    };
+    autopilot = asDemo(
+      sequence(
+        player,
+        [
+          walkTo(player, complex(r0, 0)),
+          before(
+            () => {
+              // Look down from high above, to the south.
+              parkCamera(complex(0.8, -1.5), complex(0, 1), 0.95, 85);
+              clearTrails();
             },
-            12
-          );
-        },
-      ],
-      () =>
-        toast(
-          `z walked a logarithmic spiral, but every value of log z walked a perfectly straight line. Each lap multiplied z's distance by ${Math.exp(growth * TAU).toFixed(2)}, which always adds the same amount to the real part, while the angle adds 2π to the imaginary part. Each lap behind the cloud also took z up a level from the camera's.`,
-          15000
-        )
+            {
+              start: () => pathAutopilot(player, path, speed),
+              plan: () => ({ seconds: pathLength(path) / speed, end: path(1) }),
+            }
+          ),
+        ],
+        () =>
+          toast(
+            `z walked a logarithmic spiral, but every value of log z walked a perfectly straight line. Each lap multiplied z's distance by ${Math.exp(growth * TAU).toFixed(2)}, which always adds the same amount to the real part, while the angle adds 2π to the imaginary part. Each lap behind the cloud also took z up a level from the camera's.`,
+            15000
+          )
+      ),
+      "Spiral in, straight out"
     );
   }
 
@@ -948,24 +1215,26 @@ async function main() {
     const inner = 2.5;
     const outer = 9;
     const half = (75 * Math.PI) / 180;
-    autopilot = sequence(
-      player,
-      [
-        () => gotoAutopilot(player, polar(inner, -half)),
-        () => {
-          parkCamera(complex(6, 0), complex(-1, 0), 1.0, 90);
-          clearTrails();
-          return lineTo(player, polar(outer, -half), 10)();
-        },
-        arcAround(player, 2 * half, 10, false),
-        lineTo(player, polar(inner, half), 10),
-        arcAround(player, -2 * half, 10, false),
-      ],
-      () =>
-        toast(
-          "A slice of pizza became a rectangle! The straight sides, pointing at the branch point, became lines parallel to the real axis. The curved sides, around the branch point, became lines parallel to the imaginary axis. And the corners stayed square: log preserves angles.",
-          14000
-        )
+    autopilot = asDemo(
+      sequence(
+        player,
+        [
+          walkTo(player, polar(inner, -half)),
+          before(() => {
+            parkCamera(complex(6, 0), complex(-1, 0), 1.0, 90);
+            clearTrails();
+          }, lineTo(player, polar(outer, -half), 10)),
+          arcAround(player, 2 * half, 10, false),
+          lineTo(player, polar(inner, half), 10),
+          arcAround(player, -2 * half, 10, false),
+        ],
+        () =>
+          toast(
+            "A slice of pizza became a rectangle! The straight sides, pointing at the branch point, became lines parallel to the real axis. The curved sides, around the branch point, became lines parallel to the imaginary axis. And the corners stayed square: log preserves angles.",
+            14000
+          )
+      ),
+      "Pizza slice to rectangle"
     );
   }
 
@@ -981,26 +1250,28 @@ async function main() {
       liftSlider.value = "0.8";
     }
     const radius = 3;
-    autopilot = sequence(
-      player,
-      [
-        () => gotoAutopilot(player, polar(radius, -Math.PI / 2)),
-        () => {
-          // Low, and off to the side, so you can see the levels stacked up.
-          parkCamera(player.z, normalize(complex(-0.6, 1)), 0.28, 42);
-          clearTrails();
-          return arcAround(player, TAU, 12, false)();
-        },
-        arcAround(player, TAU, 12, false),
-        pause(player, 1.5),
-        arcAround(player, -TAU, 12, false),
-        arcAround(player, -TAU, 12, false),
-      ],
-      () =>
-        toast(
-          "A spiral staircase! Each counterclockwise lap climbed one level, and each clockwise lap came back down one. The camera stayed on the ground floor while z went up and down. The levels connect behind the cloud, where you can't see the seam.",
-          14000
-        )
+    autopilot = asDemo(
+      sequence(
+        player,
+        [
+          walkTo(player, polar(radius, -Math.PI / 2)),
+          before(() => {
+            // Low, and off to the side, so you can see the levels stacked up.
+            parkCamera(player.z, normalize(complex(-0.6, 1)), 0.28, 42);
+            clearTrails();
+          }, arcAround(player, TAU, 12, false)),
+          arcAround(player, TAU, 12, false),
+          pause(player, 1.5),
+          arcAround(player, -TAU, 12, false),
+          arcAround(player, -TAU, 12, false),
+        ],
+        () =>
+          toast(
+            "A spiral staircase! Each counterclockwise lap climbed one level, and each clockwise lap came back down one. The camera stayed on the ground floor while z went up and down. The levels connect behind the cloud, where you can't see the seam.",
+            14000
+          )
+      ),
+      "Parking garage (3D)"
     );
   }
 
@@ -1305,6 +1576,37 @@ async function main() {
   }
 
   //
+  // Demo countdown.  So you can tell a demo that's still running from one that's finished.
+  //
+  const demoStatus = getById("demoStatus");
+  const demoName = getById("demoName");
+  const demoTime = getById("demoTime");
+  const demoBar = getById("demoBar");
+  getById("demoStop").addEventListener("click", () => (autopilot = undefined));
+  let shownDemo: Autopilot | undefined;
+  /** The longest the current demo has had left.  For the progress bar. */
+  let demoTotal = 0;
+  function updateDemoStatus() {
+    const demo = autopilot?.title ? autopilot : undefined;
+    demoStatus.hidden = !demo;
+    if (!demo) {
+      shownDemo = undefined;
+      return;
+    }
+    const remaining = Math.max(0, demo.remaining?.() ?? 0);
+    if (demo != shownDemo) {
+      shownDemo = demo;
+      demoTotal = 0;
+      demoName.textContent = demo.title!;
+    }
+    // The remaining time is only an estimate.  Don't let the bar go backwards.
+    demoTotal = Math.max(demoTotal, remaining);
+    const seconds = Math.ceil(remaining);
+    demoTime.textContent = `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")} left`;
+    demoBar.style.width = `${(100 * (1 - remaining / Math.max(demoTotal, 1e-6))).toFixed(1)}%`;
+  }
+
+  //
   // Readout
   //
   let lastReadout = -Infinity;
@@ -1535,9 +1837,11 @@ async function main() {
 
     // z might fade when it's on the other sheet from the camera.  The outputs never fade.
     zCharacter.setOpacity(zSheet == 0 || offSheetStyle != "fade" ? 1 : OFF_SHEET_OPACITY);
+    zTrail.setOffSheetOpacity(offSheetStyle == "fade" ? OFF_SHEET_TRAIL_OPACITY : 1);
 
     branchPoint.update(dt, time, floorHeight);
     updateReadout();
+    updateDemoStatus();
     renderer.render(scene, camera);
     outputRenderer.render(outputScene, outputCamera);
   }
@@ -1563,6 +1867,8 @@ async function main() {
     demoSpiral,
     demoCamera,
     demoSpiralStillCamera,
+    demoSurfaceTour,
+    demoRemaining: () => autopilot?.remaining?.(),
     demoLogCircles,
     demoLogApproach,
     demoLogSpiral,
