@@ -7,6 +7,8 @@ import {
   shaderColor,
   SKY_COLOR,
   view,
+  type FloorUniforms,
+  type Space,
 } from "./world";
 
 const MAX_POINTS = 20000;
@@ -27,11 +29,16 @@ attribute vec2 side;
 attribute vec2 lift;
 uniform float uFadeOffSheet;
 uniform float uWidth;
+/** World units per math unit, and the math point at the world's origin.  See Space. */
+uniform float uScale;
+uniform vec2 uCenter;
 varying vec3 vWorld;
 varying float vAcross;
 varying float vOnSheet;
 void main() {
-  vec4 world = modelMatrix * vec4(position, 1.0);
+  // position is in math coordinates:  (Re, 0, -Im).
+  vec3 local = vec3((position.x - uCenter.x) * uScale, position.y, (position.z + uCenter.y) * uScale);
+  vec4 world = modelMatrix * vec4(local, 1.0);
   // Never let the trail get thinner than a few pixels, so it's still visible from far away.
   float grow = max(1.0, 0.005 * distance(cameraPosition, world.xyz) / uWidth);
   world.xz += side * grow;
@@ -76,12 +83,23 @@ void main() {
 }
 `;
 
+export type TrailOptions = {
+  /**
+   * For z's trail.  z lives on the Riemann surface, so parts of its trail can be on the other sheet
+   * from the camera.  Those parts are faded, like z itself.  If this is true, you must pass w to add().
+   */
+  fadeOffSheet?: boolean;
+  /** Which floor this trail sits on.  The default is the input's floor. */
+  uniforms?: FloorUniforms;
+  space?: Space;
+};
+
 /**
  * A flat ribbon on the floor, following a path.
- * The path is stored in math coordinates, so zooming just rebuilds the ribbon.
+ * The path is stored in math coordinates.  The shader applies the zoom, so zooming is free.
  */
 export class Trail {
-  readonly mesh: THREE.Mesh;
+  readonly mesh: THREE.Mesh<THREE.BufferGeometry, THREE.ShaderMaterial>;
   private points: TrailPoint[] = [];
   private readonly positions = new Float32Array(MAX_POINTS * 2 * 3);
   private readonly attribute: THREE.BufferAttribute;
@@ -90,23 +108,14 @@ export class Trail {
   private readonly lifts = new Float32Array(MAX_POINTS * 2 * 2);
   private readonly liftAttribute: THREE.BufferAttribute;
   private readonly geometry = new THREE.BufferGeometry();
+  private readonly space: Space;
   /** Everything before this index is already correct in the buffer. */
   private validCount = 0;
-  private builtScale = NaN;
 
-  /**
-   * width includes the dark outline.
-   *
-   * fadeOffSheet is for z's trail.  z lives on the Riemann surface, so parts of its trail can be on
-   * the other sheet from the camera.  Those parts are faded, like z itself.  If this is true, you must
-   * pass w to add().
-   */
-  constructor(
-    color: number,
-    private readonly width: number,
-    y: number,
-    fadeOffSheet = false
-  ) {
+  /** width is in world units, and includes the dark outline. */
+  constructor(color: number, private readonly width: number, y: number, options: TrailOptions = {}) {
+    const fadeOffSheet = options.fadeOffSheet ?? false;
+    this.space = options.space ?? view;
     const index = new Uint32Array((MAX_POINTS - 1) * 6);
     for (let i = 0; i < MAX_POINTS - 1; i++) {
       const a = 2 * i;
@@ -135,10 +144,13 @@ export class Trail {
         vertexShader,
         fragmentShader,
         uniforms: {
-          ...floorUniforms,
+          // Shared, so this follows the 3D floor it's sitting on.
+          ...(options.uniforms ?? floorUniforms),
           uColor: { value: shaderColor(color) },
           uFadeOffSheet: { value: fadeOffSheet ? 1 : 0 },
           uWidth: { value: width },
+          uScale: { value: 1 },
+          uCenter: { value: new THREE.Vector2() },
           uFogColor: { value: shaderColor(SKY_COLOR) },
           uFogDensity: { value: FOG_DENSITY },
         },
@@ -157,7 +169,7 @@ export class Trail {
     return this.points[this.points.length - 1]?.z;
   }
 
-  /** w is the square root of z that says which sheet z is on.  Only needed with fadeOffSheet. */
+  /** w is the function's value that says which sheet z is on.  Only needed with fadeOffSheet. */
   add(z: Complex, w?: Complex) {
     if (this.points.length >= MAX_POINTS) {
       this.points = this.points.slice(MAX_POINTS / 2);
@@ -175,11 +187,9 @@ export class Trail {
   }
 
   update() {
-    const scale = view.scale;
-    if (scale != this.builtScale) {
-      this.builtScale = scale;
-      this.validCount = 0;
-    }
+    const u = this.mesh.material.uniforms;
+    u.uScale.value = this.space.scale;
+    u.uCenter.value.set(this.space.center.re, this.space.center.im);
     const points = this.points;
     const count = points.length;
     const start = Math.max(0, this.validCount);
@@ -202,10 +212,8 @@ export class Trail {
         nz = dx / length;
       }
       const { z: point, w } = points[i];
-      const x = point.re * scale;
-      const z = -point.im * scale;
       // Both edges start at the middle.  The shader moves them out, so it can widen far away trails.
-      p.set([x, 0, z, x, 0, z], i * 6);
+      p.set([point.re, 0, -point.im, point.re, 0, -point.im], i * 6);
       this.sides.set([nx * half, nz * half, -nx * half, -nz * half], i * 4);
       if (w) {
         this.lifts.set([w.re, w.im, w.re, w.im], i * 4);

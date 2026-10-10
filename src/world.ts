@@ -34,9 +34,21 @@ export const BLUE_COLOR = 0x4ea8ff;
 export const SKY_COLOR = 0x121829;
 export const FOG_DENSITY = 0.0065;
 
-export const view = {
+/**
+ * How a complex plane maps onto a floor.  world = (math - center) × scale, with Im pointing toward -z.
+ * The input's world always has its center at the branch point, 0.  The outputs' world moves its center
+ * to keep the outputs in view.
+ */
+export type Space = {
   /** World units per math unit. */
+  scale: number;
+  center: Complex;
+};
+
+/** The input's world, where z walks. */
+export const view: Space = {
   scale: 5,
+  center: { re: 0, im: 0 },
 };
 
 /** Your 9 rainbow colors.  From canvas-recorder/src/glib/my-rainbow.ts. */
@@ -64,22 +76,26 @@ export const MY_RAINBOW = [
  * Either way it's level under the camera's subject, rises on the right as it goes behind the branch
  * point, and falls on the left.  The two edges meet behind the cloud, at different heights.
  *
- * These are shared by every shader that draws on the floor, and by floorHeight().
+ * floorUniforms are shared by every shader that draws on the input's floor, and by floorHeight().
  */
-export const floorUniforms = {
-  /** 0 for √, 1 for log.  See MultiFunction.shaderId. */
-  uFunction: { value: 0 },
-  /** 0 for a flat floor.  Bigger is taller. */
-  uLift: { value: 0 },
-  /** The angle of the camera, as seen from the branch point.  The cut is directly opposite. */
-  uCameraAngle: { value: 0 },
-  /** The total angle of the camera's own value.  This picks the colors. */
-  uCameraTotal: { value: 0 },
-  /** The camera's total angle minus its subject's.  Always between -π and π. */
-  uRelAngle: { value: 0 },
-  /** The total angle of the camera's subject.  For putting z's trail at its own height. */
-  uFocusTotal: { value: 0 },
-};
+export function makeFloorUniforms() {
+  return {
+    /** 0 for √, 1 for log.  See MultiFunction.shaderId. */
+    uFunction: { value: 0 },
+    /** 0 for a flat floor.  Bigger is taller. */
+    uLift: { value: 0 },
+    /** The angle of the camera, as seen from the branch point.  The cut is directly opposite. */
+    uCameraAngle: { value: 0 },
+    /** The total angle of the camera's own value.  This picks the colors. */
+    uCameraTotal: { value: 0 },
+    /** The camera's total angle minus its subject's.  Always between -π and π. */
+    uRelAngle: { value: 0 },
+    /** The total angle of the camera's subject.  For putting z's trail at its own height. */
+    uFocusTotal: { value: 0 },
+  };
+}
+export type FloorUniforms = ReturnType<typeof makeFloorUniforms>;
+export const floorUniforms = makeFloorUniforms();
 
 /** The angle of this point around the branch point, measured from the camera's direction, -π to π. */
 export function cameraRelativeAngle(x: number, worldZ: number) {
@@ -138,7 +154,15 @@ float floorHeight(vec2 worldXZ) {
 `;
 
 export function toWorld(z: Complex, y = 0, target = new THREE.Vector3()) {
-  return target.set(z.re * view.scale, y, -z.im * view.scale);
+  return toWorldIn(view, z, y, target);
+}
+
+export function toWorldIn(space: Space, z: Complex, y = 0, target = new THREE.Vector3()) {
+  return target.set(
+    (z.re - space.center.re) * space.scale,
+    y,
+    -(z.im - space.center.im) * space.scale
+  );
 }
 
 export function toMath(x: number, worldZ: number): Complex {

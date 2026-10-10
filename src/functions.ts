@@ -32,6 +32,8 @@ export interface MultiFunction {
   /** All of the outputs we draw.  w, z's own value, is outputs(w)[ownIndex]. */
   outputs(w: Complex): Complex[];
   readonly ownIndex: number;
+  /** The outputs' view zooms to fit these.  The others can be near the edges. */
+  readonly framed: readonly number[];
   readonly outputColors: readonly number[];
   /**
    * The total angle that z has turned around the branch point to reach this value, counting full turns.
@@ -53,6 +55,7 @@ export const SQUARE_ROOT: MultiFunction = {
   continueTo: sqrtNear,
   outputs: (w) => [w, negate(w)],
   ownIndex: 0,
+  framed: [0, 1],
   outputColors: [RED_COLOR, BLUE_COLOR],
   total: (w) => 2 * arg(w),
   relative: (from, to) => 2 * wrapAngle(arg(to) - arg(from)),
@@ -87,6 +90,8 @@ export const LOGARITHM: MultiFunction = {
     return result;
   },
   ownIndex: LOG_NEIGHBORS,
+  // Fitting all five makes them too small.  Fit z's own value and one on each side.
+  framed: [LOG_NEIGHBORS - 1, LOG_NEIGHBORS, LOG_NEIGHBORS + 1],
   // From the top down:  2π𝒾 above z's own value, then 1 above, z's own (red, like √), 1 below, 2 below.
   outputColors: [0xf2e14c, 0xffa53d, RED_COLOR, BLUE_COLOR, 0xa47bff],
   total: (w) => w.im,

@@ -24,13 +24,16 @@ import {
   FOG_DENSITY,
   gridSpacing,
   headingToward,
+  makeFloorUniforms,
   SKY_COLOR,
   toMath,
   toWorld,
+  toWorldIn,
   turnToward,
   view,
   wrapAngle,
   Z_COLOR,
+  type Space,
 } from "./world";
 
 const WALK_SPEED = 5;
@@ -128,6 +131,41 @@ async function main() {
   const floor = new Floor();
   scene.add(...floor.meshes, floor.labels);
 
+  //
+  // The outputs get their own view, on an ordinary flat plane.  Its camera moves itself to keep the
+  // outputs in view:  it follows their middle, and zooms to fit them.
+  //
+  const outputCanvas = getById<HTMLCanvasElement>("outputs");
+  const outputRenderer = new THREE.WebGLRenderer({ canvas: outputCanvas, antialias: true });
+  outputRenderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  outputRenderer.toneMapping = THREE.NeutralToneMapping;
+  const outputScene = new THREE.Scene();
+  outputScene.background = new THREE.Color(SKY_COLOR);
+  outputScene.fog = new THREE.FogExp2(SKY_COLOR, FOG_DENSITY * 2);
+  outputScene.add(new THREE.HemisphereLight(0xc8d4ff, 0x302838, 1.7));
+  const outputSun = new THREE.DirectionalLight(0xffffff, 1.6);
+  outputSun.position.set(-30, 50, 20);
+  outputScene.add(outputSun);
+  const outputCamera = new THREE.PerspectiveCamera(45, 1, 0.1, 1000);
+  // Looking north, like a map:  Re to the right, Im away from you.
+  outputCamera.position.set(0, 17, 12);
+  outputCamera.lookAt(0, 0, -0.5);
+  /** The world shows everything within about this many world units of the center. */
+  const OUTPUT_FIT = 6.5;
+  const outputSpace: Space = { scale: 4, center: { re: 0, im: 0 } };
+  // Flat, and nothing to do with the input's cloud or cut.
+  const outputFloorUniforms = makeFloorUniforms();
+  const outputFloor = new Floor({
+    uniforms: outputFloorUniforms,
+    space: outputSpace,
+    glow: false,
+    heightAt: () => 0,
+    labelRange: 20,
+    keepClear: 0,
+    hole: 0.001,
+  });
+  outputScene.add(...outputFloor.meshes, outputFloor.labels);
+
   const branchPoint = new BranchPoint();
   scene.add(branchPoint.group);
 
@@ -141,7 +179,7 @@ async function main() {
   const eyeMarker = new FloatingEye();
   eyeMarker.root.visible = false;
   scene.add(zCharacter.root, eyeMarker.root);
-  const zTrail = new Trail(Z_COLOR, 0.34, 0.02, true);
+  const zTrail = new Trail(Z_COLOR, 0.34, 0.02, { fadeOffSheet: true });
   scene.add(zTrail.mesh);
 
   /** The robots and trails for one function's outputs. */
@@ -151,13 +189,20 @@ async function main() {
   function castFor(f: MultiFunction): Cast {
     let result = casts.get(f);
     if (!result) {
-      const characters = f.outputColors.map((color) => new Character(color, f.name));
-      const trails = f.outputColors.map((color, i) => new Trail(color, 0.28, 0.025 + 0.003 * i));
+      // The outputs' view is small, so the nameplates need to be bigger to be readable.
+      const characters = f.outputColors.map((color) => new Character(color, f.name, 0.11));
+      const trails = f.outputColors.map(
+        (color, i) =>
+          new Trail(color, 0.28, 0.025 + 0.003 * i, {
+            uniforms: outputFloorUniforms,
+            space: outputSpace,
+          })
+      );
       for (const character of characters) {
         // Start out facing us.
         character.heading = 0;
       }
-      scene.add(...characters.map((c) => c.root), ...trails.map((t) => t.mesh));
+      outputScene.add(...characters.map((c) => c.root), ...trails.map((t) => t.mesh));
       result = { characters, trails, previous: [] };
       casts.set(f, result);
     }
@@ -291,6 +336,7 @@ async function main() {
     player.w = fn.principal(player.z);
     cameraW = player.w;
     cast.previous = fn.outputs(player.w);
+    snapOutputView = true;
     clearTrails();
     functionButtons.forEach((button, f) => button.classList.toggle("active", f == fn));
     demoLists.forEach((list, f) => (list.hidden = f != fn));
@@ -304,6 +350,7 @@ async function main() {
     player.z = START_Z;
     player.w = fn.principal(START_Z);
     cast.previous = fn.outputs(player.w);
+    snapOutputView = true;
     player.heading = Math.PI;
     view.scale = targetScale = START_SCALE;
     cameraRig.yawOffset = 0;
@@ -1276,26 +1323,57 @@ async function main() {
   const timer = new THREE.Timer();
   let time = 0;
 
-  function resize() {
-    const width = window.innerWidth;
-    const height = window.innerHeight;
-    renderer.setSize(width, height, false);
-    camera.aspect = width / height;
-    camera.updateProjectionMatrix();
+  /** The page layout decides how big each canvas is.  Keep the renderer and camera in sync with that. */
+  const rendererSize = new THREE.Vector2();
+  function fitToCanvas(r: THREE.WebGLRenderer, c: THREE.PerspectiveCamera) {
+    const width = r.domElement.clientWidth;
+    const height = r.domElement.clientHeight;
+    if (width == 0 || height == 0) {
+      return;
+    }
+    r.getSize(rendererSize);
+    if (rendererSize.x != width || rendererSize.y != height) {
+      r.setSize(width, height, false);
+      c.aspect = width / height;
+      c.updateProjectionMatrix();
+    }
   }
-  window.addEventListener("resize", resize);
-  resize();
 
-  function maybeAddToTrail(trail: Trail, z: Complex, w?: Complex) {
+  /** Jump straight to the right framing, instead of easing into it.  For a fresh start. */
+  let snapOutputView = true;
+  /** Keep the outputs in view:  follow their middle, and zoom to fit them. */
+  function frameOutputs(outputs: Complex[], dt: number) {
+    const framed = fn.framed.map((i) => outputs[i]);
+    const middle = { re: 0, im: 0 };
+    for (const w of framed) {
+      middle.re += w.re / framed.length;
+      middle.im += w.im / framed.length;
+    }
+    let extent = 0;
+    for (const w of framed) {
+      extent = Math.max(extent, abs(sub(w, middle)));
+    }
+    const wanted = THREE.MathUtils.clamp(OUTPUT_FIT / Math.max(extent * 1.15, 0.5), 0.02, 200);
+    const k = snapOutputView ? 1 : 1 - Math.exp(-dt * 3);
+    snapOutputView = false;
+    const center = outputSpace.center;
+    outputSpace.center = {
+      re: center.re + (middle.re - center.re) * k,
+      im: center.im + (middle.im - center.im) * k,
+    };
+    outputSpace.scale *= Math.pow(wanted / outputSpace.scale, k);
+  }
+
+  function maybeAddToTrail(trail: Trail, z: Complex, w: Complex | undefined, scale: number) {
     const last = trail.last;
-    if (!last || abs(sub(z, last)) * view.scale > 0.12) {
+    if (!last || abs(sub(z, last)) * scale > 0.12) {
       trail.add(z, w);
     }
   }
 
-  /** Face the direction a root is moving.  Returns its speed in world units per second. */
+  /** Face the direction an output is moving.  Returns its speed in world units per second. */
   function steerRoot(character: Character, step: Complex, dt: number) {
-    const speed = (abs(step) * view.scale) / dt;
+    const speed = (abs(step) * outputSpace.scale) / dt;
     if (speed > 0.1) {
       const target = headingToward(step.re, -step.im);
       character.heading = turnToward(character.heading, target, 10 * dt);
@@ -1307,6 +1385,8 @@ async function main() {
     timer.update(timestamp);
     const dt = Math.min(timer.getDelta(), 0.05);
     time += dt;
+    fitToCanvas(renderer, camera);
+    fitToCanvas(outputRenderer, outputCamera);
     updateScale(dt);
 
     // Move z or the floating camera.
@@ -1372,22 +1452,25 @@ async function main() {
     zCharacter.animate(dt, moving == player ? speed : 0);
     zCharacter.nameplate.setValue(format(player.z));
 
+    // The outputs, in their own view, on a flat floor.
+    frameOutputs(outputs, dt);
     cast.characters.forEach((character, i) => {
       const w = outputs[i];
-      toWorld(w, 0, character.root.position);
+      toWorldIn(outputSpace, w, 0, character.root.position);
       const step = sub(w, cast.previous[i] ?? w);
       character.animate(dt, steerRoot(character, step, dt));
       character.nameplate.setValue(format(w));
-      maybeAddToTrail(cast.trails[i], w);
+      maybeAddToTrail(cast.trails[i], w, undefined, outputSpace.scale);
     });
     cast.previous = outputs;
+    outputFloor.update(0, false);
 
     toWorld(eye.z, 0, eyeMarker.root.position);
     eyeMarker.heading = eye.heading;
     eyeMarker.animate(time);
     eyeMarker.root.visible = mode == "explore" && !eyeHidden;
 
-    maybeAddToTrail(zTrail, player.z, player.w);
+    maybeAddToTrail(zTrail, player.z, player.w, view.scale);
     for (const trail of allTrails()) {
       trail.update();
     }
@@ -1404,16 +1487,13 @@ async function main() {
     updateFloorShape(dt);
     sheetMix += ((sheetCheckbox.checked ? 1 : 0) - sheetMix) * (1 - Math.exp(-dt * 6));
     // The see-through levels of the parking garage only make sense for log, and only in 3D.
-    floor.update(view.scale, sheetMix, fn == LOGARITHM && floorUniforms.uLift.value > 0.02);
+    floor.update(sheetMix, fn == LOGARITHM && floorUniforms.uLift.value > 0.02);
 
     standOnFloor(zCharacter.root, zCharacter.shadow);
     if (fn == LOGARITHM) {
       // On the log spiral z might be on a different level.  Put it there, at its own height.
       zCharacter.root.position.y =
         floorUniforms.uLift.value * (fn.total(player.w) - floorUniforms.uFocusTotal.value);
-    }
-    for (const character of cast.characters) {
-      standOnFloor(character.root, character.shadow);
     }
     standOnFloor(eyeMarker.root, eyeMarker.shadow);
     clickRing.position.y = floorHeight(clickRing.position.x, clickRing.position.z) + 0.04;
@@ -1424,6 +1504,7 @@ async function main() {
     branchPoint.update(dt, time, floorHeight);
     updateReadout();
     renderer.render(scene, camera);
+    outputRenderer.render(outputScene, outputCamera);
   }
 
   // Everyone waves hello.

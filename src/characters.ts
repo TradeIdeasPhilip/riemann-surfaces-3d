@@ -33,7 +33,12 @@ class Nameplate {
   private readonly texture: THREE.CanvasTexture;
   private lastText = "";
 
-  constructor(private readonly title: string, private readonly color: string) {
+  /** size is relative to the height of the view. */
+  constructor(
+    private readonly title: string,
+    private readonly color: string,
+    size = 0.065
+  ) {
     this.canvas.width = 512;
     this.canvas.height = 150;
     this.context = this.canvas.getContext("2d")!;
@@ -50,8 +55,7 @@ class Nameplate {
       })
     );
     this.sprite.center.set(0.5, 0);
-    const height = 0.065;
-    this.sprite.scale.set((height * 512) / 150, height, 1);
+    this.sprite.scale.set((size * 512) / 150, size, 1);
     this.setValue("");
   }
 
@@ -105,8 +109,9 @@ export class Character {
   private emoting = false;
   private opacity = 1;
 
-  constructor(color: number, title: string) {
-    this.nameplate = new Nameplate(title, cssColor(color));
+  /** nameplateSize is relative to the height of the view.  Small views need bigger nameplates. */
+  constructor(color: number, title: string, nameplateSize?: number) {
+    this.nameplate = new Nameplate(title, cssColor(color), nameplateSize);
     this.nameplate.sprite.position.y = CHARACTER_HEIGHT + 0.35;
     this.root.add(this.nameplate.sprite, this.shadow);
     if (template) {

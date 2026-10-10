@@ -10,59 +10,85 @@
     />
   </head>
   <body>
-    <canvas id="scene"></canvas>
+    <div id="app">
+      <!-- The input:  z, on the Riemann surface. -->
+      <main id="mainView">
+        <canvas id="scene"></canvas>
+        <div id="toast"></div>
+      </main>
 
-    <div id="panel" class="glass">
-      <h1 id="title">√z Walkabout</h1>
-      <div class="row function">
-        <button id="functionSqrt" class="active">√z</button>
-        <button id="functionLog">log z</button>
-      </div>
-      <div class="row mode">
-        <button id="walkMode" class="active" title="Shortcut: C">🚶 Move z</button>
-        <button id="exploreMode" title="Shortcut: C">👁 Move camera only</button>
-      </div>
-      <div class="label">Demos</div>
-      <div id="sqrtDemos" class="demos">
-        <button id="demoCircle" class="demo">Walk z around the branch point</button>
-        <button id="demoMiss" class="demo">Walk a loop that misses it</button>
-        <button id="demoSpiral" class="demo">Spiral</button>
-        <button id="demoCamera" class="demo">Walk the camera around it</button>
-        <button id="demoSpiralStill" class="demo">Spiral, camera standing still</button>
-      </div>
-      <div id="logDemos" class="demos" hidden>
-        <button id="demoLogCircles" class="demo">Circles at 2, 4, and 6</button>
-        <button id="demoLogApproach" class="demo">Walk toward the branch point</button>
-        <button id="demoLogSpiral" class="demo">Spiral in, straight out</button>
-        <button id="demoLogRectangle" class="demo">Pizza slice to rectangle</button>
-        <button id="demoLogGarage" class="demo">Parking garage (3D)</button>
-        <button id="demoLogCamera" class="demo">Walk the camera around it</button>
-      </div>
-      <div class="label">Show</div>
-      <label><input type="checkbox" id="sheetColors" /> Rainbow floor (camera's sheet)</label>
-      <label class="slider"
-        >3D floor <input type="range" id="lift" min="0" max="1" step="0.01" value="0"
-      /></label>
-      <div class="row">
-        <button id="clearTrails">Clear trails</button>
-        <button id="reset">Reset</button>
-      </div>
+      <aside id="side">
+        <div id="controls">
+          <section id="panel" class="card">
+            <div class="row header">
+              <h1 id="title">√z Walkabout</h1>
+              <div class="row function">
+                <button id="functionSqrt" class="active">√z</button>
+                <button id="functionLog">log z</button>
+              </div>
+            </div>
+            <div class="row mode">
+              <button id="walkMode" class="active" title="Shortcut: C">🚶 Move z</button>
+              <button id="exploreMode" title="Shortcut: C">👁 Move camera only</button>
+            </div>
+            <div class="label">Demos</div>
+            <div id="sqrtDemos" class="demos">
+              <button id="demoCircle" class="demo">Walk z around the branch point</button>
+              <button id="demoMiss" class="demo">Walk a loop that misses it</button>
+              <button id="demoSpiral" class="demo">Spiral</button>
+              <button id="demoCamera" class="demo">Walk the camera around it</button>
+              <button id="demoSpiralStill" class="demo">Spiral, camera standing still</button>
+            </div>
+            <div id="logDemos" class="demos" hidden>
+              <button id="demoLogCircles" class="demo">Circles at 2, 4, and 6</button>
+              <button id="demoLogApproach" class="demo">Walk toward the branch point</button>
+              <button id="demoLogSpiral" class="demo">Spiral in, straight out</button>
+              <button id="demoLogRectangle" class="demo">Pizza slice to rectangle</button>
+              <button id="demoLogGarage" class="demo">Parking garage (3D)</button>
+              <button id="demoLogCamera" class="demo">Walk the camera around it</button>
+            </div>
+            <div class="label">Show</div>
+            <div class="row show">
+              <label><input type="checkbox" id="sheetColors" /> Rainbow floor</label>
+              <label class="slider"
+                >3D floor <input type="range" id="lift" min="0" max="1" step="0.01" value="0"
+              /></label>
+            </div>
+            <div class="row">
+              <button id="clearTrails">Clear trails</button>
+              <button id="reset">Reset</button>
+            </div>
+          </section>
+
+          <section id="readout" class="card"></section>
+
+          <details id="help" class="card">
+            <summary>
+              <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> walk · <b>drag</b> look · <b>scroll</b> zoom ·
+              <kbd>C</kbd> camera
+            </summary>
+            <div class="keys">
+              <span><kbd>W</kbd><kbd>S</kbd> <kbd>↑</kbd><kbd>↓</kbd> walk</span>
+              <span><kbd>A</kbd><kbd>D</kbd> <kbd>←</kbd><kbd>→</kbd> turn</span>
+              <span><kbd>Q</kbd><kbd>E</kbd> sidestep</span>
+              <span><kbd>Shift</kbd> run</span>
+              <span><b>Click</b> the floor to walk there</span>
+              <span><b>Drag</b> to look around</span>
+              <span><b>Scroll</b> / pinch to zoom</span>
+              <span><kbd>C</kbd> move z ⇄ move camera</span>
+              <span><kbd>Esc</kbd> stop a demo</span>
+              <span><b>Shift+scroll</b> camera distance</span>
+            </div>
+          </details>
+        </div>
+
+        <!-- The outputs, on an ordinary plane.  The camera here moves itself. -->
+        <div id="outputView">
+          <canvas id="outputs"></canvas>
+          <div id="outputTitle">Outputs</div>
+        </div>
+      </aside>
     </div>
-
-    <div id="readout" class="glass"></div>
-
-    <div id="help" class="glass">
-      <span><kbd>W</kbd><kbd>S</kbd> or <kbd>↑</kbd><kbd>↓</kbd> walk</span>
-      <span><kbd>A</kbd><kbd>D</kbd> or <kbd>←</kbd><kbd>→</kbd> turn</span>
-      <span><kbd>Q</kbd><kbd>E</kbd> sidestep</span>
-      <span><kbd>Shift</kbd> run</span>
-      <span><b>Click</b> the floor to walk there</span>
-      <span><b>Drag</b> to look around</span>
-      <span><b>Scroll</b> / pinch to zoom the plane</span>
-      <span><kbd>C</kbd> move z ⇄ move camera</span>
-    </div>
-
-    <div id="toast"></div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

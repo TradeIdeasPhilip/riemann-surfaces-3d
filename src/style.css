@@ -23,12 +23,31 @@ body {
   font: 14px/1.35 system-ui, -apple-system, "Segoe UI", sans-serif;
 }
 
-#scene {
-  position: fixed;
-  inset: 0;
+/*
+ * The input's view fills the left.  The right column has the controls on top and the outputs' view
+ * on the bottom.
+ */
+#app {
+  --side: clamp(340px, 32vw, 480px);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) var(--side);
+  height: 100%;
+}
+
+#mainView {
+  position: relative;
+  overflow: hidden;
+  min-width: 0;
+}
+
+#scene,
+#outputs {
   width: 100%;
   height: 100%;
   display: block;
+}
+
+#scene {
   touch-action: none;
   cursor: grab;
 }
@@ -37,20 +56,50 @@ body {
   cursor: grabbing;
 }
 
-.glass {
-  position: fixed;
-  background: var(--glass);
+#side {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: #0d1220;
+  border-left: 1px solid var(--border);
+}
+
+#controls {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+#outputView {
+  position: relative;
+  flex: 0 0 auto;
+  height: min(var(--side), 42vh);
+  border-top: 1px solid var(--border);
+}
+
+#outputTitle {
+  position: absolute;
+  top: 6px;
+  left: 10px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  pointer-events: none;
+}
+
+.card {
+  background: rgba(255, 255, 255, 0.035);
   border: 1px solid var(--border);
   border-radius: 10px;
-  backdrop-filter: blur(6px);
-  -webkit-backdrop-filter: blur(6px);
+  padding: 10px 12px;
 }
 
 #panel {
-  top: 12px;
-  left: 12px;
-  width: 260px;
-  padding: 12px;
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -80,9 +129,14 @@ h1 {
 }
 
 .demos {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
   gap: 6px;
+}
+
+.demos > button {
+  font-size: 13px;
+  line-height: 1.2;
 }
 
 .demos[hidden] {
@@ -143,11 +197,7 @@ label.slider input {
 }
 
 #readout {
-  top: 12px;
-  right: 12px;
-  padding: 10px 12px;
   font-variant-numeric: tabular-nums;
-  min-width: 250px;
 }
 
 #readout table {
@@ -179,17 +229,42 @@ label.slider input {
 }
 
 #help {
-  left: 50%;
-  bottom: 12px;
-  transform: translateX(-50%);
-  padding: 7px 12px;
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: center;
-  gap: 4px 16px;
-  font-size: 12.5px;
+  font-size: 12px;
   color: var(--muted);
-  max-width: calc(100vw - 24px);
+}
+
+#help summary {
+  cursor: pointer;
+}
+
+#help .keys {
+  margin-top: 8px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px 10px;
+}
+
+.row.header {
+  align-items: center;
+  justify-content: space-between;
+}
+
+.row.header h1 {
+  margin: 0;
+}
+
+.row.function > button {
+  flex: 0 0 auto;
+  min-width: 56px;
+}
+
+.row.show {
+  align-items: center;
+  gap: 14px;
+}
+
+.row.show label.slider {
+  flex: 1;
 }
 
 #help b {
@@ -212,11 +287,11 @@ kbd {
 }
 
 #toast {
-  position: fixed;
+  position: absolute;
   left: 50%;
-  top: 18%;
+  top: 12%;
   transform: translateX(-50%);
-  max-width: min(560px, calc(100vw - 32px));
+  max-width: min(560px, calc(100% - 32px));
   padding: 10px 16px;
   border-radius: 10px;
   background: rgba(14, 18, 32, 0.85);
@@ -232,14 +307,25 @@ kbd {
   opacity: 1;
 }
 
-@media (max-width: 700px) {
-  #panel {
-    width: 210px;
-    font-size: 12px;
+/* On a narrow screen, stack everything instead. */
+@media (max-width: 760px) {
+  html,
+  body {
+    overflow: auto;
   }
-  #readout {
-    top: auto;
-    bottom: 120px;
-    min-width: 0;
+  #app {
+    --side: 100%;
+    grid-template-columns: 1fr;
+    grid-template-rows: 60vh auto;
+    height: auto;
+  }
+  #side {
+    border-left: none;
+  }
+  #controls {
+    overflow: visible;
+  }
+  #outputView {
+    height: 60vw;
   }
 }

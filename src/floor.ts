@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { I } from "./complex";
+import { I, type Complex } from "./complex";
 import {
   floorHeight,
   floorHeightGlsl,
@@ -10,6 +10,9 @@ import {
   shaderColor,
   SKY_COLOR,
   TAPE_RADIUS,
+  view,
+  type FloorUniforms,
+  type Space,
 } from "./world";
 
 /*
@@ -41,6 +44,10 @@ uniform float uLevel;
 /** 1 for the see-through levels above and below the camera's. */
 uniform float uGhost;
 uniform float uScale;
+/** The math point at the world's origin.  See Space. */
+uniform vec2 uCenter;
+/** 1 to draw the glow around the base of the cloud. */
+uniform float uGlow;
 uniform float uMajor;
 uniform float uMinor;
 uniform float uSheetMix;
@@ -68,7 +75,7 @@ vec3 rainbow(float k) {
 
 void main() {
   // Math coordinates.  Re = world x, Im = -world z.
-  vec2 p = vec2(vWorld.x, -vWorld.z) / uScale;
+  vec2 p = vec2(vWorld.x, -vWorld.z) / uScale + uCenter;
   vec3 plain = vec3(0.10, 0.125, 0.19);
   vec3 color = plain;
 
@@ -92,7 +99,7 @@ void main() {
 
   // The glow around the base of the cloud.
   float d = length(vWorld.xz);
-  float glow = 1.0 - smoothstep(0.0, 7.0, d);
+  float glow = (1.0 - smoothstep(0.0, 7.0, d)) * uGlow;
   color += mix(vec3(0.43, 0.47, 1.0), vec3(0.55, 0.86, 1.0), exp(-d / 1.5)) * 0.8 * glow * glow;
 
   float minor = grid(p, uMinor, 1.0);
@@ -130,11 +137,14 @@ const GHOST_LEVELS = 3;
 /** How bright the rainbow is on the floor.  Dim enough that the trails and robots stand out. */
 const RAINBOW_BRIGHTNESS = 0.6;
 
-/** A disk from just inside the cloud to far past the fog, in polar coordinates.  See vertexShader. */
-function polarGeometry() {
-  const rings = 200;
+/**
+ * A disk from innerRadius to far past the fog, in polar coordinates.  See vertexShader.
+ * The input's floor starts just inside the cloud.  The outputs' floor has no cloud, so it starts at
+ * almost 0.
+ */
+function polarGeometry(innerRadius: number) {
+  const rings = 220;
   const segments = 360;
-  const innerRadius = 1;
   const outerRadius = 1e6;
   const positions: number[] = [];
   for (let i = 0; i <= rings; i++) {
@@ -161,16 +171,18 @@ function polarGeometry() {
 
 type LabelInfo = { text: string; x: number; z: number; title: boolean };
 
-function floorMaterial(level: number) {
+function floorMaterial(level: number, shared: FloorUniforms, glow: boolean) {
   const ghost = level != 0;
   return new THREE.ShaderMaterial({
     vertexShader,
     fragmentShader,
     uniforms: {
-      // These are shared, so changing floorUniforms changes every floor material.
-      ...floorUniforms,
+      // These are shared, so changing them changes every material on this floor.
+      ...shared,
       uLevel: { value: level },
       uGhost: { value: ghost ? 1 : 0 },
+      uGlow: { value: glow ? 1 : 0 },
+      uCenter: { value: new THREE.Vector2() },
       uScale: { value: 1 },
       uMajor: { value: 1 },
       uMinor: { value: 0.2 },
@@ -188,6 +200,22 @@ function floorMaterial(level: number) {
   });
 }
 
+export type FloorOptions = {
+  /** The default is the input's floor, with its cloud, its cut, and its 3D shape. */
+  uniforms?: FloorUniforms;
+  space?: Space;
+  /** The glow around the base of the cloud. */
+  glow?: boolean;
+  /** Where the labels stand.  The default follows the input's 3D floor. */
+  heightAt?: (x: number, z: number) => number;
+  /** How far from the middle of the view to put labels, in world units. */
+  labelRange?: number;
+  /** Don't put labels this close to the branch point, in world units.  They'd be in the cloud. */
+  keepClear?: number;
+  /** The floor has a hole in the middle this big, in world units.  The cloud covers it. */
+  hole?: number;
+};
+
 /** The complex plane, drawn on the floor. */
 export class Floor {
   /** The camera's own level, plus see-through copies of the levels above it, for log. */
@@ -195,12 +223,21 @@ export class Floor {
   readonly labels = new THREE.Group();
   private readonly sprites: THREE.Sprite[] = [];
   private readonly spriteMaterials = new Map<string, THREE.SpriteMaterial>();
-  private labelScale = NaN;
+  private labelKey = "";
+  private readonly space: Space;
+  private readonly heightAt: (x: number, z: number) => number;
+  private readonly labelRange: number;
+  private readonly keepClear: number;
 
-  constructor() {
-    const geometry = polarGeometry();
+  constructor(options: FloorOptions = {}) {
+    this.space = options.space ?? view;
+    this.heightAt = options.heightAt ?? floorHeight;
+    this.labelRange = options.labelRange ?? 160;
+    this.keepClear = options.keepClear ?? TAPE_RADIUS + 0.8;
+    const geometry = polarGeometry(options.hole ?? 1);
     for (let level = 0; level <= GHOST_LEVELS; level++) {
-      const mesh = new THREE.Mesh(geometry, floorMaterial(level));
+      const material = floorMaterial(level, options.uniforms ?? floorUniforms, options.glow ?? true);
+      const mesh = new THREE.Mesh(geometry, material);
       // The vertex shader moves everything, so three.js can't know where the floor is.
       mesh.frustumCulled = false;
       this.meshes.push(mesh);
@@ -208,50 +245,64 @@ export class Floor {
   }
 
   /** showLevels says whether to draw the see-through levels above the camera's. */
-  update(scale: number, sheetMix: number, showLevels: boolean) {
+  update(sheetMix: number, showLevels: boolean) {
+    const { scale, center } = this.space;
     const { major, minor } = gridSpacing(scale);
     this.meshes.forEach((mesh, level) => {
       const u = mesh.material.uniforms;
       u.uScale.value = scale;
+      u.uCenter.value.set(center.re, center.im);
       u.uMajor.value = major;
       u.uMinor.value = minor;
       u.uSheetMix.value = sheetMix;
       mesh.visible = level == 0 || showLevels;
     });
-    if (scale != this.labelScale) {
-      this.labelScale = scale;
-      this.updateLabels(scale, major);
+    const key = `${scale} ${center.re} ${center.im}`;
+    if (key != this.labelKey) {
+      this.labelKey = key;
+      this.updateLabels(scale, major, center);
     }
     // The 3D floor moves up and down, so the labels have to follow it.
     for (const sprite of this.sprites) {
       if (sprite.visible) {
-        sprite.position.y = floorHeight(sprite.position.x, sprite.position.z) + 0.05;
+        sprite.position.y = this.heightAt(sprite.position.x, sprite.position.z) + 0.05;
       }
     }
   }
 
-  private updateLabels(scale: number, major: number) {
+  private updateLabels(scale: number, major: number, center: Complex) {
     const items: LabelInfo[] = [];
     const step = major * scale;
-    const count = Math.min(40, Math.floor(160 / step));
     const decimals = Math.max(0, -Math.floor(Math.log10(major) + 1e-9));
-    for (let k = 1; k <= count; k++) {
-      for (const sign of [1, -1]) {
-        const value = sign * k * major;
-        const world = value * scale;
-        if (Math.abs(world) < TAPE_RADIUS + 0.8) {
+    const reach = this.labelRange / scale;
+    /** Labels along one axis, within reach of the middle of the view. */
+    const along = (middle: number, add: (value: number, text: string) => void) => {
+      const first = Math.ceil((middle - reach) / major);
+      const last = Math.floor((middle + reach) / major);
+      // Don't make too many.  Skip some if we have to.
+      const skip = Math.max(1, Math.ceil((last - first) / 80));
+      for (let k = first; k <= last; k += skip) {
+        const value = k * major;
+        if (k == 0 || Math.abs(value) * scale < this.keepClear) {
           continue;
         }
-        const text = value.toFixed(decimals).replace("-", "−");
-        items.push({ text, x: world, z: 0, title: false });
-        const imaginary = Math.abs(value) == 1 ? (sign < 0 ? "−" : "") + I : text + I;
-        items.push({ text: imaginary, x: 0, z: -world, title: false });
+        add(value, value.toFixed(decimals).replace("-", "−"));
       }
-    }
+    };
+    // Real numbers along the real axis, imaginary numbers along the imaginary axis.
+    along(center.re, (value, text) =>
+      items.push({ text, x: (value - center.re) * scale, z: center.im * scale, title: false })
+    );
+    along(center.im, (value, text) => {
+      const imaginary = Math.abs(value) == 1 ? (value < 0 ? "−" : "") + I : text + I;
+      items.push({ text: imaginary, x: -center.re * scale, z: -(value - center.im) * scale, title: false });
+    });
     // Axis names, half way between two numbers so they don't collide.
-    const titleSteps = Math.max(2, Math.ceil((TAPE_RADIUS + 2) / step)) + 0.5;
-    items.push({ text: "Re", x: titleSteps * step, z: 0, title: true });
-    items.push({ text: "Im", x: 0, z: -titleSteps * step, title: true });
+    const titleSteps = Math.max(2, Math.ceil((this.keepClear + 1.2) / step)) + 0.5;
+    const titleRe = Math.round(center.re / major) * major + titleSteps * major;
+    const titleIm = Math.round(center.im / major) * major + titleSteps * major;
+    items.push({ text: "Re", x: (titleRe - center.re) * scale, z: center.im * scale, title: true });
+    items.push({ text: "Im", x: -center.re * scale, z: -(titleIm - center.im) * scale, title: true });
 
     while (this.sprites.length < items.length) {
       const sprite = new THREE.Sprite();
