@@ -610,16 +610,22 @@ async function main() {
     return speed;
   }
 
-  /** The length of a path, in world units. */
-  function pathLength(path: (u: number) => Complex, scale = view.scale) {
-    let length = 0;
+  const PATH_SAMPLES = 400;
+  /** The distance along a path at PATH_SAMPLES + 1 evenly spaced values of u, in world units. */
+  function pathDistances(path: (u: number) => Complex, scale = view.scale) {
+    const result = [0];
     let previous = path(0);
-    for (let i = 1; i <= 400; i++) {
-      const next = path(i / 400);
-      length += abs(sub(next, previous));
+    for (let i = 1; i <= PATH_SAMPLES; i++) {
+      const next = path(i / PATH_SAMPLES);
+      result.push(result[i - 1] + abs(sub(next, previous)) * scale);
       previous = next;
     }
-    return length * scale;
+    return result;
+  }
+
+  /** The length of a path, in world units. */
+  function pathLength(path: (u: number) => Complex, scale = view.scale) {
+    return pathDistances(path, scale)[PATH_SAMPLES];
   }
 
   /**
@@ -633,7 +639,13 @@ async function main() {
     framing?: CameraFraming
   ): Autopilot {
     let u = 0;
-    const length = pathLength(path);
+    const distances = pathDistances(path);
+    const length = distances[PATH_SAMPLES];
+    /** How far along the path we are, in world units. */
+    const travelled = () => {
+      const i = Math.min(PATH_SAMPLES - 1, Math.floor(u * PATH_SAMPLES));
+      return distances[i] + (distances[i + 1] - distances[i]) * (u * PATH_SAMPLES - i);
+    };
     return {
       body,
       framing,
@@ -654,7 +666,7 @@ async function main() {
         body.heading = turnToward(body.heading, headingToward(direction.re, -direction.im), 8 * dt);
         return speed;
       },
-      remaining: () => ((1 - u) * length) / speed,
+      remaining: () => (length - travelled()) / speed,
     };
   }
 
@@ -953,68 +965,95 @@ async function main() {
     );
   }
 
-  /**
-   * A tour of the whole √z surface, in 3D.
-   *   1. The floor rises into two sheets.
-   *   2. z walks a tight spiral around the branch point.  The camera watches from low and off to one
-   *      side, and keeps moving slowly, so the two grids slide past each other.  The camera stands
-   *      still otherwise, so each lap lands on the other sheet, and the trail maps out both of them.
-   *   3. The camera walks once around the branch point, looking in.  That puts it on the other sheet,
-   *      so the two sheets trade places.
-   *   4. The camera settles between the two sheets and looks around.
-   */
-  function demoSurfaceTour() {
+  //
+  // Tours.  Each function has one, with the same four parts:
+  //   1. The floor rises from flat into the 3D surface.
+  //   2. z walks a path that maps out the surface.  The camera watches from low and off to one side,
+  //      and keeps moving slowly, so the layers of grid lines slide past each other.  The camera
+  //      stands still otherwise, so where z's trail lands shows the shape of the surface.
+  //   3. The camera walks once around the branch point, looking in.
+  //   4. The camera settles between two layers of the surface, then turns to look along them.
+  //
+
+  /** Tours start just outside the cones.  In world units. */
+  const TOUR_INNER = BLOCK_RADIUS + 0.6;
+  /** The tour's camera looks at the branch point from this direction:  south, and a little west. */
+  const TOUR_CAMERA_ANGLE = -Math.PI / 2 - 0.5;
+  /** The tours' paths start a little counterclockwise from the camera. */
+  const TOUR_PATH_ANGLE = TOUR_CAMERA_ANGLE + 0.35;
+
+  type CameraPlace = { pitch: number; distance: number };
+  type TourOptions = {
+    /** z's path, in math coordinates, at the standard zoom.  path(0) is where z starts. */
+    path: (u: number) => Complex;
+    /** How fast z walks, in world units per second. */
+    speed: number;
+    /** How high the 3D floor slider goes, 0 to 1. */
+    lift: number;
+    /** While z walks, the camera drifts from high to low, then keeps swaying. */
+    high: CameraPlace;
+    low: CameraPlace;
+    /** The camera walks around the branch point:  1 for counterclockwise, -1 for clockwise. */
+    orbitDirection: 1 | -1;
+    orbit: CameraPlace;
+    /** Where the camera ends up. */
+    between: CameraPlace;
+    /** At the end, the camera turns this far, in radians, to look along the surface.  Positive is left. */
+    endTurn: number;
+    title: string;
+    message: string;
+  };
+
+  function tour(options: TourOptions) {
+    const { path, speed, high, low, orbit, between, orbitDirection } = options;
     const scale = START_SCALE;
-    // In world units.  The spiral starts just outside the cones.
-    const inner = BLOCK_RADIUS + 0.6;
-    const spacing = 2.4;
-    const laps = 5;
-    /** The camera looks at the branch point from this direction:  south, and a little west. */
-    const cameraAngle = -Math.PI / 2 - 0.5;
-    const spiralStart = cameraAngle + 0.35;
-    const spiral = (u: number) => {
-      const theta = u * laps * TAU;
-      return polar((inner + (spacing * theta) / TAU) / scale, spiralStart + theta);
-    };
-    const spiralSpeed = 15;
     const orbitSeconds = 12;
     const endSeconds = 11;
-    // Two low angles to drift between.
-    const high = { pitch: 0.45, distance: 28 };
-    const low = { pitch: 0.22, distance: 28 };
-    const orbit = { pitch: 0.38, distance: 30 };
-    const between = { pitch: 0.03, distance: 11 };
     const smooth = THREE.MathUtils.smootherstep;
+    /** Looking in toward the branch point, while walking around it. */
+    const lookIn = (orbitDirection * Math.PI) / 2;
 
     const setup = () => {
       setMode("walk");
       view.scale = targetScale = scale;
       clearTrails();
       sheetCheckbox.checked = true;
-      // The tour is all about where z and its trail are in 3D, so keep them solid on both sheets.
+      // The tour is all about where z and its trail are in 3D, so keep them solid on every sheet.
       offSheetSelect.value = "solid";
       // Start flat.
       liftSlider.value = "0";
       floorUniforms.uLift.value = 0;
-      player.z = spiral(0);
+      player.z = path(0);
       player.w = fn.principal(player.z);
-      const direction = sub(spiral(0.001), spiral(0));
+      const direction = sub(path(0.001), path(0));
       player.heading = headingToward(direction.re, -direction.im);
       cast.previous = fn.outputs(player.w);
       snapOutputView = true;
-      parkCamera(polar(inner / scale, cameraAngle), polar(1, cameraAngle + Math.PI), high.pitch, high.distance);
+      parkCamera(
+        polar(TOUR_INNER / scale, TOUR_CAMERA_ANGLE),
+        polar(1, TOUR_CAMERA_ANGLE + Math.PI),
+        high.pitch,
+        high.distance
+      );
     };
 
-    /** The camera walks once around the branch point, looking in. */
+    /** The camera walks once around the branch point. */
     const walkAround: Step = {
       start() {
         const r = abs(eye.z);
         const start = arg(eye.z);
         // Face along the circle, without moving the camera.
-        const tangent = headingToward(-Math.sin(start), -Math.cos(start));
+        const tangent = headingToward(
+          -orbitDirection * Math.sin(start),
+          -orbitDirection * Math.cos(start)
+        );
         cameraRig.yawOffset = wrapAngle(cameraRig.yawOffset + eye.heading - tangent);
         eye.heading = tangent;
-        return pathAutopilot(eye, (u) => polar(r, start + TAU * u), (TAU * r * view.scale) / orbitSeconds);
+        return pathAutopilot(
+          eye,
+          (u) => polar(r, start + orbitDirection * TAU * u),
+          (TAU * r * view.scale) / orbitSeconds
+        );
       },
       plan: (from) => ({ seconds: orbitSeconds, end: from }),
     };
@@ -1023,47 +1062,105 @@ async function main() {
       sequence(
         player,
         [
-          // 1. The floor rises, half way, in half a second.
+          // 1. The floor rises in half a second.
           before(
             setup,
-            pause(player, 1.2, (t) => (liftSlider.value = String(0.5 * smooth(t, 0, 0.5))))
+            pause(player, 1.2, (t) => (liftSlider.value = String(options.lift * smooth(t, 0, 0.5))))
           ),
-          // 2. The spiral.  The camera drifts from the higher angle to the lower one, then keeps swaying.
+          // 2. z walks.  The camera drifts from the higher angle to the lower one, then keeps swaying.
           withCamera(
             {
-              start: () => pathAutopilot(player, spiral, spiralSpeed),
-              plan: () => ({ seconds: pathLength(spiral, scale) / spiralSpeed, end: spiral(1) }),
+              start: () => pathAutopilot(player, path, speed),
+              plan: () => ({ seconds: pathLength(path, scale) / speed, end: path(1) }),
             },
             (t) => ({
               pitch:
                 high.pitch +
                 (low.pitch - high.pitch) * smooth(t, 0, 2) +
                 (0.1 * (1 - Math.cos((Math.max(0, t - 2) * TAU) / 14))) / 2,
-              distance: high.distance,
+              distance: high.distance + (low.distance - high.distance) * smooth(t, 0, 2),
               yawOffset: 0.3 * Math.sin((t * TAU) / 20),
             })
           ),
-          // 3. The camera walks around the branch point.  Looking in means looking left.
-          withCamera(walkAround, () => ({ ...orbit, yawOffset: Math.PI / 2 })),
-          // 4. Down between the two sheets, looking at where they meet behind the cloud.  Then turn
-          // right, to look along the sheets, toward z.
+          // 3. The camera walks around the branch point, looking in.
+          withCamera(walkAround, () => ({ ...orbit, yawOffset: lookIn })),
+          // 4. Down between two layers, looking at where they meet behind the cloud.  Then turn to
+          // look along them.
           withCamera(pause(eye, endSeconds), (t) => {
             const down = smooth(t, 0, 3);
             return {
               pitch: orbit.pitch + (between.pitch - orbit.pitch) * down,
               distance: orbit.distance + (between.distance - orbit.distance) * down,
-              yawOffset: Math.PI / 2 - 1.75 * smooth(t, 4, endSeconds),
+              yawOffset: lookIn + options.endTurn * smooth(t, 4, endSeconds),
             };
           }),
         ],
-        () =>
-          toast(
-            "That's the whole surface for √z: two sheets that only cross behind the cloud. Each lap of the spiral went around the branch point, so it landed on the other sheet. Then the camera went around, so the sheets traded places. Now you're between them. Drag to look around.",
-            14000
-          )
+        () => toast(options.message, 14000)
       ),
-      "Surface tour (3D)"
+      options.title
     );
+  }
+
+  /**
+   * A tour of the whole √z surface.  z walks a tight spiral around the branch point.  Each lap lands
+   * on the other sheet, so the trail maps out both of them.  Then the camera walks around the branch
+   * point, which puts it on the other sheet, so the two sheets trade places.
+   */
+  function demoSurfaceTour() {
+    const spacing = 2.4;
+    const laps = 5;
+    tour({
+      path: (u) => {
+        const theta = u * laps * TAU;
+        return polar((TOUR_INNER + (spacing * theta) / TAU) / START_SCALE, TOUR_PATH_ANGLE + theta);
+      },
+      speed: 15,
+      lift: 0.5,
+      high: { pitch: 0.45, distance: 28 },
+      low: { pitch: 0.22, distance: 28 },
+      orbitDirection: 1,
+      orbit: { pitch: 0.38, distance: 30 },
+      between: { pitch: 0.03, distance: 11 },
+      // Turn right, toward z.
+      endTurn: -1.75,
+      title: "Surface tour (3D)",
+      message:
+        "That's the whole surface for √z: two sheets that only cross behind the cloud. Each lap of the spiral went around the branch point, so it landed on the other sheet. Then the camera went around, so the sheets traded places. Now you're between them. Drag to look around.",
+    });
+  }
+
+  /**
+   * A tour of the log surface:  the parking garage.  z walks up three levels, spiraling outward, then
+   * turns around and walks back down, still spiraling outward.  So the way down never covers the way
+   * up, and every level gets two rings.  Then the camera walks clockwise around the branch point,
+   * which takes it down one level, so the whole garage seems to rise.  That leaves z one level up.
+   */
+  function demoLogTour() {
+    const levels = 3;
+    const laps = 2 * levels;
+    const spacing = 1.2;
+    tour({
+      path: (u) => {
+        const lap = u * laps;
+        // Counterclockwise, up, for the first half.  Then clockwise, back down.
+        const turns = lap <= levels ? lap : laps - lap;
+        return polar((TOUR_INNER + spacing * lap) / START_SCALE, TOUR_PATH_ANGLE + TAU * turns);
+      },
+      speed: 15,
+      lift: 0.6,
+      // The garage is tall, so stand back.
+      high: { pitch: 0.45, distance: 40 },
+      low: { pitch: 0.22, distance: 40 },
+      orbitDirection: -1,
+      orbit: { pitch: 0.4, distance: 34 },
+      // Far enough back to see z on the level above.
+      between: { pitch: 0.03, distance: 18 },
+      // Turn right, toward z.
+      endTurn: -0.7,
+      title: "Surface tour (3D)",
+      message:
+        "That's the parking garage for log z. Each lap around the branch point took z up a level, or back down. The way down was farther out than the way up, so every level got two rings. Then the camera walked clockwise around the branch point, which took it down a level, so z ended up on the level above you. Drag to look around.",
+    });
   }
   getById("demoCircle").addEventListener("click", demoCircle);
   getById("demoMiss").addEventListener("click", demoMiss);
@@ -1281,6 +1378,7 @@ async function main() {
   getById("demoLogRectangle").addEventListener("click", demoLogRectangle);
   getById("demoLogGarage").addEventListener("click", demoLogGarage);
   getById("demoLogCamera").addEventListener("click", demoCamera);
+  getById("demoLogTour").addEventListener("click", demoLogTour);
 
   //
   // Keyboard
@@ -1868,6 +1966,7 @@ async function main() {
     demoCamera,
     demoSpiralStillCamera,
     demoSurfaceTour,
+    demoLogTour,
     demoRemaining: () => autopilot?.remaining?.(),
     demoLogCircles,
     demoLogApproach,
