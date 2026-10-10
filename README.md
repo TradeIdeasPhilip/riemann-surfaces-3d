@@ -39,9 +39,17 @@ npm run dev
   frame's answer (`sqrtNear`).
 - **Sheets.** The camera's subject (z, or the floating eye) carries its own square root, so it knows which
   sheet it's on. The camera is tied to its subject by a segment that never crosses the branch point, so
-  the camera is on the same sheet. The optional floor coloring shows the branch of √z that agrees with
+  the camera is on the same sheet. The optional rainbow floor shows the branch of √z that agrees with
   the camera. Its cut is directly behind the cloud. Walk the camera once around the branch point and you're
   on the other sheet.
+- **Rainbow floor.** Nine solid wedges ([myRainbow](https://github.com/TradeIdeasPhilip/canvas-recorder/blob/master/src/glib/my-rainbow.ts)),
+  by the angle of √z. All nine go around once per turn of √z, which is two turns of z, so each sheet
+  shows half the rainbow.
+- **3D floor.** The floor is the Riemann surface: height is Im(√z), measured relative to √ of whatever
+  the camera is following. It's level there, rises on the right as it goes behind the cloud, and falls on
+  the left. The floor is a polar mesh whose seam always points directly away from the camera, so the two
+  edges of the cut can have different heights (`src/floor.ts`). `floorHeight()` in `src/world.ts`
+  computes the same height for everything that stands on the floor.
 
 ## Publishing
 

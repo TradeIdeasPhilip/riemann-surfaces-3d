@@ -19,6 +19,9 @@ import {
   BLOCK_RADIUS,
   BLUE_COLOR,
   CAMERA_BLOCK_RADIUS,
+  floorHeight,
+  floorNormal,
+  floorUniforms,
   FOG_DENSITY,
   gridSpacing,
   headingToward,
@@ -35,6 +38,8 @@ import {
 const WALK_SPEED = 5;
 const RUN_SPEED = 11;
 const TURN_SPEED = 2.4;
+/** The 3D floor slider at its maximum.  See floorUniforms in world.ts. */
+const MAX_LIFT = 1.2;
 const START_PITCH = 0.34;
 const START_DISTANCE = 10;
 const LOOK_HEIGHT = 2.3;
@@ -199,6 +204,7 @@ async function main() {
   const exploreButton = getById<HTMLButtonElement>("exploreMode");
   const sheetCheckbox = getById<HTMLInputElement>("sheetColors");
   const ghostCheckbox = getById<HTMLInputElement>("ghost");
+  const liftSlider = getById<HTMLInputElement>("lift");
   const readout = getById("readout");
 
   function setMode(newMode: "walk" | "explore") {
@@ -619,7 +625,6 @@ async function main() {
   });
 
   const raycaster = new THREE.Raycaster();
-  const floorPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
   function clickToMove(clientX: number, clientY: number) {
     const rect = canvas.getBoundingClientRect();
     raycaster.setFromCamera(
@@ -629,7 +634,17 @@ async function main() {
       ),
       camera
     );
-    const hit = raycaster.ray.intersectPlane(floorPlane, new THREE.Vector3());
+    // Find where the click hits the floor.  The 3D floor isn't flat, so start with the plane
+    // y = 0, then slide the plane up or down to the floor's height there, and repeat.
+    const floorPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+    let hit: THREE.Vector3 | null = null;
+    for (let i = 0; i < 6; i++) {
+      hit = raycaster.ray.intersectPlane(floorPlane, new THREE.Vector3());
+      if (!hit) {
+        return;
+      }
+      floorPlane.constant = -floorHeight(hit.x, hit.z);
+    }
     if (!hit) {
       return;
     }
@@ -740,7 +755,37 @@ async function main() {
     const wanted = hit < 1 ? Math.max(0.04, hit - 0.02) : 1;
     cameraRig.pull = wanted < cameraRig.pull ? wanted : Math.min(wanted, cameraRig.pull + dt * 1.5);
     camera.position.lerpVectors(focus, desired, cameraRig.pull);
+    // Don't let the 3D floor come up through the camera.
+    camera.position.y = Math.max(
+      camera.position.y,
+      floorHeight(camera.position.x, camera.position.z) + 0.6
+    );
     camera.lookAt(focus);
+  }
+
+  /** Put something on the floor, and tilt its shadow to match the floor. */
+  const shadowNormal = new THREE.Vector3();
+  const up = new THREE.Vector3(0, 1, 0);
+  function standOnFloor(root: THREE.Object3D, shadow: THREE.Object3D) {
+    const { x, z } = root.position;
+    root.position.y = floorHeight(x, z);
+    floorNormal(x, z, shadowNormal).applyAxisAngle(up, -root.rotation.y);
+    shadow.quaternion.setFromUnitVectors(up, shadowNormal);
+  }
+
+  /**
+   * Tell the floor shaders and floorHeight() where the camera is and which sheet it's on.
+   * Everything that sits on the floor needs this before it can find its height.
+   */
+  function updateFloorShape(dt: number) {
+    const u = floorUniforms;
+    u.uSheetDir.value.set(sheetDirection.re, sheetDirection.im);
+    const focus = normalize(activeBody().w);
+    u.uFocusDir.value.set(focus.re, focus.im);
+    u.uCameraAngle.value = Math.atan2(-camera.position.z, camera.position.x);
+    const wanted = Number(liftSlider.value) * MAX_LIFT;
+    const lift = u.uLift.value + (wanted - u.uLift.value) * (1 - Math.exp(-dt * 6));
+    u.uLift.value = Math.abs(lift - wanted) < 1e-4 ? wanted : lift;
   }
 
   //
@@ -902,15 +947,22 @@ async function main() {
 
     updateCamera(dt);
     sheetDirection = cameraSheetDirection();
+    updateFloorShape(dt);
     sheetMix += ((sheetCheckbox.checked ? 1 : 0) - sheetMix) * (1 - Math.exp(-dt * 6));
-    floor.update(view.scale, camera.position, sheetDirection, sheetMix);
+    floor.update(view.scale, sheetMix);
+
+    standOnFloor(zCharacter.root, zCharacter.shadow);
+    standOnFloor(redCharacter.root, redCharacter.shadow);
+    standOnFloor(blueCharacter.root, blueCharacter.shadow);
+    standOnFloor(eyeMarker.root, eyeMarker.shadow);
+    clickRing.position.y = floorHeight(clickRing.position.x, clickRing.position.z) + 0.04;
 
     const redHere = redOnCameraSheet();
     const faded = 0.22;
     redCharacter.setOpacity(ghostCheckbox.checked && !redHere ? faded : 1);
     blueCharacter.setOpacity(ghostCheckbox.checked && redHere ? faded : 1);
 
-    branchPoint.update(dt, time);
+    branchPoint.update(dt, time, floorHeight);
     updateReadout();
     renderer.render(scene, camera);
   }

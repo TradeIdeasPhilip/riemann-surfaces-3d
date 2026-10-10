@@ -95,6 +95,7 @@ export class Character {
   /** At the character's feet.  rotation.y is the heading. */
   readonly root = new THREE.Group();
   readonly nameplate: Nameplate;
+  readonly shadow = makeBlobShadow(0.6);
   private readonly materials: THREE.Material[] = [];
   private mixer?: THREE.AnimationMixer;
   private readonly actions = new Map<string, THREE.AnimationAction>();
@@ -105,7 +106,7 @@ export class Character {
   constructor(color: number, title: string) {
     this.nameplate = new Nameplate(title, cssColor(color));
     this.nameplate.sprite.position.y = CHARACTER_HEIGHT + 0.35;
-    this.root.add(this.nameplate.sprite, makeBlobShadow(0.6));
+    this.root.add(this.nameplate.sprite, this.shadow);
     if (template) {
       this.buildFromTemplate(template, color);
     } else {
@@ -245,6 +246,7 @@ export class Character {
 export class FloatingEye {
   readonly root = new THREE.Group();
   readonly nameplate = new Nameplate("camera", "#f2f2ff");
+  readonly shadow = makeBlobShadow(0.45);
   private readonly ball = new THREE.Group();
 
   constructor() {
@@ -263,7 +265,7 @@ export class FloatingEye {
     this.ball.add(eyeball, irisMesh, pupilMesh);
     this.ball.position.y = 1.5;
     this.nameplate.sprite.position.y = 2.05;
-    this.root.add(this.ball, this.nameplate.sprite, makeBlobShadow(0.45));
+    this.root.add(this.ball, this.nameplate.sprite, this.shadow);
   }
 
   get heading() {

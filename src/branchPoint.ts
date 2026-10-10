@@ -8,6 +8,11 @@ import {
 } from "./world";
 
 const CLOUD_HEIGHT = 600;
+/**
+ * The cloud also goes below the floor.  When the 3D floor tilts down on the left,
+ * the low edge of the cut is behind the part of the cloud that's below y = 0.
+ */
+const CLOUD_DEPTH = 100;
 
 const cloudVertexShader = /* glsl */ `
 varying vec3 vWorld;
@@ -83,7 +88,7 @@ void main() {
   vec3 color = mix(violet, cyan, smoothstep(0.3, 0.75, n));
   color = mix(color, white, (1.0 - smoothstep(0.0, 0.6, b)) * (0.35 + 0.4 * n2));
   color *= 0.75 + 0.5 * n;
-  color *= 1.0 + 0.7 * exp(-y * 0.5);
+  color *= 1.0 + 0.7 * exp(-abs(y) * 0.5);
   color += cyan * 0.4 * smoothstep(0.55, 1.0, b) * n;
 
   float dist = distance(vWorld, cameraPosition);
@@ -99,12 +104,12 @@ function makeCloud(radius: number, core: number, strength: number) {
   const geometry = new THREE.CylinderGeometry(
     radius,
     radius,
-    CLOUD_HEIGHT,
+    CLOUD_HEIGHT + CLOUD_DEPTH,
     96,
     1,
     true
   );
-  geometry.translate(0, CLOUD_HEIGHT / 2, 0);
+  geometry.translate(0, (CLOUD_HEIGHT - CLOUD_DEPTH) / 2, 0);
   const material = new THREE.ShaderMaterial({
     vertexShader: cloudVertexShader,
     fragmentShader: cloudFragmentShader,
@@ -157,7 +162,8 @@ export function makeBlobShadow(radius: number) {
     depthWrite: false,
   });
   const mesh = new THREE.Mesh(geometry, material);
-  mesh.position.y = 0.012;
+  // A little higher than you'd think, because the 3D floor isn't perfectly flat under it.
+  mesh.position.y = 0.03;
   mesh.renderOrder = -1;
   return mesh;
 }
@@ -203,44 +209,84 @@ function tapeTexture() {
   return texture;
 }
 
-function makeCones(count: number) {
-  const group = new THREE.Group();
-  const coneMaterial = new THREE.MeshStandardMaterial({
-    map: coneTexture(),
-    roughness: 0.6,
-  });
-  const baseMaterial = new THREE.MeshStandardMaterial({
-    color: 0x2a1a10,
-    roughness: 0.8,
-  });
-  const coneGeometry = new THREE.ConeGeometry(0.26, 0.8, 24, 1, true);
-  coneGeometry.translate(0, 0.44, 0);
-  const baseGeometry = new THREE.BoxGeometry(0.56, 0.05, 0.56);
-  baseGeometry.translate(0, 0.025, 0);
-  for (let i = 0; i < count; i++) {
-    // Same angles as the vertices of the tape below.
-    const theta = (i / count) * Math.PI * 2;
-    const x = TAPE_RADIUS * Math.sin(theta);
-    const z = TAPE_RADIUS * Math.cos(theta);
-    const cone = new THREE.Mesh(coneGeometry, coneMaterial);
-    const base = new THREE.Mesh(baseGeometry, baseMaterial);
-    cone.position.set(x, 0, z);
-    base.position.set(x, 0, z);
-    base.rotation.y = theta;
-    group.add(cone, base);
+/** The orange cones and the caution tape strung between them.  They sit on the (maybe 3D) floor. */
+class Barrier {
+  readonly group = new THREE.Group();
+  private readonly cones: THREE.Object3D[] = [];
+  private readonly tapePositions: Float32Array;
+  private readonly tapeGeometry = new THREE.BufferGeometry();
+  private static readonly TAPE_HEIGHT = 0.66;
+  private static readonly TAPE_WIDTH = 0.17;
+
+  constructor(private readonly count: number) {
+    const coneMaterial = new THREE.MeshStandardMaterial({
+      map: coneTexture(),
+      roughness: 0.6,
+    });
+    const baseMaterial = new THREE.MeshStandardMaterial({
+      color: 0x2a1a10,
+      roughness: 0.8,
+    });
+    const coneGeometry = new THREE.ConeGeometry(0.26, 0.8, 24, 1, true);
+    coneGeometry.translate(0, 0.44, 0);
+    const baseGeometry = new THREE.BoxGeometry(0.56, 0.05, 0.56);
+    baseGeometry.translate(0, 0.025, 0);
+    for (let i = 0; i < count; i++) {
+      const cone = new THREE.Group();
+      cone.add(new THREE.Mesh(coneGeometry, coneMaterial), new THREE.Mesh(baseGeometry, baseMaterial));
+      const angle = this.angle(i);
+      cone.position.set(TAPE_RADIUS * Math.cos(angle), 0, -TAPE_RADIUS * Math.sin(angle));
+      cone.rotation.y = angle;
+      this.cones.push(cone);
+      this.group.add(cone);
+    }
+
+    // A ribbon through the cones, with a top and bottom vertex at each cone.
+    // u counts cones, so the texture repeats once between each pair of cones.
+    this.tapePositions = new Float32Array((count + 1) * 2 * 3);
+    const uv: number[] = [];
+    const index: number[] = [];
+    for (let i = 0; i <= count; i++) {
+      uv.push(i, 1, i, 0);
+      if (i < count) {
+        const a = 2 * i;
+        index.push(a, a + 1, a + 2, a + 2, a + 1, a + 3);
+      }
+    }
+    this.tapeGeometry.setAttribute("position", new THREE.BufferAttribute(this.tapePositions, 3));
+    this.tapeGeometry.setAttribute("uv", new THREE.Float32BufferAttribute(uv, 2));
+    this.tapeGeometry.setIndex(index);
+    const tape = new THREE.Mesh(
+      this.tapeGeometry,
+      new THREE.MeshBasicMaterial({
+        map: tapeTexture(),
+        side: THREE.DoubleSide,
+        toneMapped: false,
+      })
+    );
+    tape.frustumCulled = false;
+    this.group.add(tape);
   }
-  const tape = new THREE.Mesh(
-    new THREE.CylinderGeometry(TAPE_RADIUS, TAPE_RADIUS, 0.17, count, 1, true),
-    new THREE.MeshBasicMaterial({
-      map: tapeTexture(),
-      side: THREE.DoubleSide,
-      toneMapped: false,
-    })
-  );
-  tape.material.map!.repeat.set(count, 1);
-  tape.position.y = 0.66;
-  group.add(tape);
-  return group;
+
+  /** Math angle, counterclockwise from Re. */
+  private angle(i: number) {
+    return (i / this.count) * Math.PI * 2;
+  }
+
+  update(heightAt: (x: number, z: number) => number) {
+    for (const cone of this.cones) {
+      cone.position.y = heightAt(cone.position.x, cone.position.z);
+    }
+    const p = this.tapePositions;
+    const half = Barrier.TAPE_WIDTH / 2;
+    for (let i = 0; i <= this.count; i++) {
+      const cone = this.cones[i % this.count];
+      const { x, y, z } = cone.position;
+      const middle = y + Barrier.TAPE_HEIGHT;
+      p.set([x, middle + half, z, x, middle - half, z], i * 6);
+    }
+    this.tapeGeometry.attributes.position.needsUpdate = true;
+  }
 }
 
 class Sparkles {
@@ -308,11 +354,15 @@ class Sparkles {
   }
 }
 
-/** Everything at the branch point:  the cloud, the glow, the sparkles, the cones, and the tape. */
+/**
+ * Everything at the branch point:  the cloud, the sparkles, the cones, and the tape.
+ * The glow on the floor is drawn by the floor's shader.
+ */
 export class BranchPoint {
   readonly group = new THREE.Group();
   private readonly clouds: THREE.Mesh<THREE.BufferGeometry, THREE.ShaderMaterial>[];
   private readonly sparkles = new Sparkles();
+  private readonly barrier = new Barrier(12);
 
   constructor() {
     const inner = makeCloud(CLOUD_RADIUS, 1, 0.85);
@@ -321,34 +371,17 @@ export class BranchPoint {
     outer.renderOrder = 2;
     this.clouds = [inner, outer];
 
-    const glowGeometry = new THREE.CircleGeometry(CLOUD_RADIUS * 3.2, 48);
-    glowGeometry.rotateX(-Math.PI / 2);
-    const glow = new THREE.Mesh(
-      glowGeometry,
-      new THREE.MeshBasicMaterial({
-        map: radialTexture([
-          [0, "rgba(140,220,255,0.9)"],
-          [0.3, "rgba(110,120,255,0.45)"],
-          [1, "rgba(60,40,160,0)"],
-        ]),
-        transparent: true,
-        depthWrite: false,
-        blending: THREE.AdditiveBlending,
-        toneMapped: false,
-      })
-    );
-    glow.position.y = 0.01;
-
     const light = new THREE.PointLight(0x8fd8ff, 40, 30, 1.4);
     light.position.y = 2.5;
 
-    this.group.add(inner, outer, glow, this.sparkles.points, makeCones(12), light);
+    this.group.add(inner, outer, this.sparkles.points, this.barrier.group, light);
   }
 
-  update(dt: number, time: number) {
+  update(dt: number, time: number, heightAt: (x: number, z: number) => number) {
     for (const cloud of this.clouds) {
       cloud.material.uniforms.uTime.value = time;
     }
     this.sparkles.update(dt, time);
+    this.barrier.update(heightAt);
   }
 }

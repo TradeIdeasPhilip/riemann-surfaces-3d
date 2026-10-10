@@ -1,8 +1,48 @@
 import * as THREE from "three";
 import type { Complex } from "./complex";
-import { view } from "./world";
+import {
+  floorHeightGlsl,
+  floorUniforms,
+  FOG_DENSITY,
+  shaderColor,
+  SKY_COLOR,
+  view,
+} from "./world";
 
 const MAX_POINTS = 20000;
+
+const vertexShader = /* glsl */ `
+${floorHeightGlsl}
+attribute float across;
+varying vec3 vWorld;
+varying float vAcross;
+void main() {
+  vec4 world = modelMatrix * vec4(position, 1.0);
+  // Ride on top of the 3D floor.
+  world.y += floorHeight(world.xz);
+  vWorld = world.xyz;
+  vAcross = across;
+  gl_Position = projectionMatrix * viewMatrix * world;
+}
+`;
+
+const fragmentShader = /* glsl */ `
+uniform vec3 uColor;
+uniform vec3 uFogColor;
+uniform float uFogDensity;
+varying vec3 vWorld;
+varying float vAcross;
+void main() {
+  // A dark outline so the trail stands out, even on a floor wedge of the same color.
+  float a = abs(vAcross);
+  float fw = fwidth(vAcross);
+  float inside = 1.0 - smoothstep(0.62 - fw, 0.62 + fw, a);
+  vec3 color = mix(vec3(0.03, 0.04, 0.07), uColor, inside);
+  float dist = distance(vWorld, cameraPosition);
+  float fog = 1.0 - exp(-uFogDensity * uFogDensity * dist * dist);
+  gl_FragColor = vec4(mix(color, uFogColor, fog), 1.0);
+}
+`;
 
 /**
  * A flat ribbon on the floor, following a path.
@@ -18,26 +58,39 @@ export class Trail {
   private validCount = 0;
   private builtScale = NaN;
 
+  /** width includes the dark outline. */
   constructor(color: number, private readonly width: number, y: number) {
     const index = new Uint32Array((MAX_POINTS - 1) * 6);
     for (let i = 0; i < MAX_POINTS - 1; i++) {
       const a = 2 * i;
       index.set([a, a + 2, a + 1, a + 1, a + 2, a + 3], i * 6);
     }
+    const across = new Float32Array(MAX_POINTS * 2);
+    for (let i = 0; i < MAX_POINTS; i++) {
+      across[2 * i] = 1;
+      across[2 * i + 1] = -1;
+    }
     this.attribute = new THREE.BufferAttribute(this.positions, 3);
     this.attribute.setUsage(THREE.DynamicDrawUsage);
     this.geometry.setAttribute("position", this.attribute);
+    this.geometry.setAttribute("across", new THREE.BufferAttribute(across, 1));
     this.geometry.setIndex(new THREE.BufferAttribute(index, 1));
     this.geometry.setDrawRange(0, 0);
     this.mesh = new THREE.Mesh(
       this.geometry,
-      new THREE.MeshBasicMaterial({
-        color,
+      new THREE.ShaderMaterial({
+        vertexShader,
+        fragmentShader,
+        uniforms: {
+          ...floorUniforms,
+          uColor: { value: shaderColor(color) },
+          uFogColor: { value: shaderColor(SKY_COLOR) },
+          uFogDensity: { value: FOG_DENSITY },
+        },
         side: THREE.DoubleSide,
         polygonOffset: true,
         polygonOffsetFactor: -2,
         polygonOffsetUnits: -2,
-        toneMapped: false,
       })
     );
     this.mesh.position.y = y;

@@ -24,8 +24,11 @@
       <button id="demoSpiral" class="demo">Spiral</button>
       <button id="demoCamera" class="demo">Walk the camera around it</button>
       <div class="label">Show</div>
-      <label><input type="checkbox" id="sheetColors" /> Floor colored by √z (camera's sheet)</label>
+      <label><input type="checkbox" id="sheetColors" /> Rainbow floor: color by √z (camera's sheet)</label>
       <label><input type="checkbox" id="ghost" /> Fade the root on the other sheet</label>
+      <label class="slider"
+        >3D floor <input type="range" id="lift" min="0" max="1" step="0.01" value="0"
+      /></label>
       <div class="row">
         <button id="clearTrails">Clear trails</button>
         <button id="reset">Reset</button>

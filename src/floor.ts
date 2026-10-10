@@ -1,19 +1,39 @@
 import * as THREE from "three";
-import type { Complex } from "./complex";
 import {
+  floorHeight,
+  floorUniforms,
   FOG_DENSITY,
   gridSpacing,
+  MY_RAINBOW,
   shaderColor,
   SKY_COLOR,
   TAPE_RADIUS,
 } from "./world";
 
+/*
+ * The floor is a big disk around the branch point, built in polar coordinates.
+ * position.x is the distance from the branch point and position.y is the angle,
+ * measured from the direction of the camera.  So the seam at ±π is always directly
+ * behind the branch point, hidden by the cloud.  That's the branch cut.  The two copies
+ * of the seam can have different heights, which is what makes the 3D floor work.
+ */
 const vertexShader = /* glsl */ `
+uniform float uLift;
+uniform vec2 uSheetDir;
+uniform vec2 uFocusDir;
+uniform float uCameraAngle;
 varying vec3 vWorld;
 void main() {
-  vec4 world = modelMatrix * vec4(position, 1.0);
-  vWorld = world.xyz;
-  gl_Position = projectionMatrix * viewMatrix * world;
+  float r = position.x;
+  float phi = position.y;
+  // Math angle, counterclockwise from Re.
+  float angle = uCameraAngle + phi;
+  // √z, continued from the camera's direction.  phi/2 stays between -π/2 and π/2, so no jumps.
+  float sheetAngle = atan(uSheetDir.y, uSheetDir.x) + phi * 0.5;
+  vec2 w = sqrt(r) * vec2(cos(sheetAngle), sin(sheetAngle));
+  float height = uLift * (w.y * uFocusDir.x - w.x * uFocusDir.y);
+  vWorld = vec3(r * cos(angle), height, -r * sin(angle));
+  gl_Position = projectionMatrix * viewMatrix * vec4(vWorld, 1.0);
 }
 `;
 
@@ -23,14 +43,10 @@ uniform float uMajor;
 uniform float uMinor;
 uniform vec2 uSheetDir;
 uniform float uSheetMix;
+uniform vec3 uRainbow[9];
 uniform vec3 uFogColor;
 uniform float uFogDensity;
 varying vec3 vWorld;
-
-vec3 hsv2rgb(vec3 c) {
-  vec3 p = abs(fract(c.xxx + vec3(0.0, 2.0 / 3.0, 1.0 / 3.0)) * 6.0 - 3.0);
-  return c.z * mix(vec3(1.0), clamp(p - 1.0, 0.0, 1.0), c.y);
-}
 
 // Anti-aliased line, about widthPx pixels wide.  Fades out when the cells get too small to see.
 float gridAxis(float q, float fw, float widthPx) {
@@ -52,23 +68,41 @@ vec2 csqrt(vec2 z) {
   return vec2(a, z.y < 0.0 ? -b : b);
 }
 
+vec3 rainbow(float k) {
+  return uRainbow[int(mod(k, 9.0))];
+}
+
 void main() {
   // Math coordinates.  Re = world x, Im = -world z.
   vec2 p = vec2(vWorld.x, -vWorld.z) / uScale;
-
-  vec3 color = vec3(0.10, 0.125, 0.19);
+  vec3 plain = vec3(0.10, 0.125, 0.19);
+  vec3 color = plain;
 
   if (uSheetMix > 0.0) {
-    // Domain coloring of the branch of sqrt that the camera is standing on.
-    // The cut is the ray directly behind the branch point, as seen from the camera,
-    // so the cloud always hides it.
+    // Nine solid wedges of color, by the angle of √z on the camera's sheet.  Red is centered on
+    // √z = positive real.  All nine colors go around once as √z goes around once, which is two
+    // laps around the branch point.  So each sheet shows half of the rainbow, and the two edges
+    // of the cut, hidden behind the cloud, are about half a rainbow apart.
     vec2 w = csqrt(p);
     if (dot(w, uSheetDir) < 0.0) w = -w;
-    float hue = atan(w.y, w.x) / 6.28318530718;
-    float band = fract(log2(length(w) + 1e-20) * 2.0);
-    vec3 dc = hsv2rgb(vec3(fract(hue), 0.6, 0.30 + 0.14 * band));
-    color = mix(color, dc, uSheetMix);
+    // Measure from the camera's direction so the angle never wraps around on the visible sheet.
+    vec2 relative = vec2(dot(w, uSheetDir), w.y * uSheetDir.x - w.x * uSheetDir.y);
+    float sheetAngle = atan(uSheetDir.y, uSheetDir.x);
+    float t = (atan(relative.y, relative.x) + sheetAngle) * 9.0 / 6.28318530718 + 0.5;
+    float k = floor(t);
+    float f = t - k;
+    float fw = max(fwidth(t), 1e-6);
+    // Sharp edges, but anti-aliased:  how much of this pixel is in the neighboring wedge?
+    float below = clamp((0.5 * fw - f) / fw, 0.0, 1.0);
+    float above = clamp((f + 0.5 * fw - 1.0) / fw, 0.0, 1.0);
+    vec3 wedge = rainbow(k) * (1.0 - below - above) + rainbow(k - 1.0) * below + rainbow(k + 1.0) * above;
+    color = mix(plain, wedge, uSheetMix);
   }
+
+  // The glow around the base of the cloud.
+  float d = length(vWorld.xz);
+  float glow = 1.0 - smoothstep(0.0, 7.0, d);
+  color += mix(vec3(0.43, 0.47, 1.0), vec3(0.55, 0.86, 1.0), exp(-d / 1.5)) * 0.8 * glow * glow;
 
   float minor = grid(p, uMinor, 1.0);
   float major = grid(p, uMajor, 1.6);
@@ -77,8 +111,11 @@ void main() {
     clamp(1.6 + 0.5 - abs(p.y) / fwp.y, 0.0, 1.0),
     clamp(1.6 + 0.5 - abs(p.x) / fwp.x, 0.0, 1.0));
 
-  color = mix(color, vec3(0.24, 0.29, 0.40), minor * 0.6);
-  color = mix(color, vec3(0.42, 0.50, 0.66), major * 0.85);
+  // Light lines on the plain floor, dark lines on the colors.
+  vec3 minorColor = mix(vec3(0.24, 0.29, 0.40), vec3(0.0), uSheetMix);
+  vec3 majorColor = mix(vec3(0.42, 0.50, 0.66), vec3(0.0), uSheetMix);
+  color = mix(color, minorColor, minor * mix(0.6, 0.3, uSheetMix));
+  color = mix(color, majorColor, major * mix(0.85, 0.55, uSheetMix));
   color = mix(color, vec3(0.80, 0.86, 1.00), axes);
 
   float dist = distance(vWorld, cameraPosition);
@@ -86,6 +123,38 @@ void main() {
   gl_FragColor = vec4(mix(color, uFogColor, fog), 1.0);
 }
 `;
+
+/** How bright the rainbow is on the floor.  Dim enough that the trails and robots stand out. */
+const RAINBOW_BRIGHTNESS = 0.6;
+
+/** A disk from just inside the cloud to far past the fog, in polar coordinates.  See vertexShader. */
+function polarGeometry() {
+  const rings = 200;
+  const segments = 360;
+  const innerRadius = 1;
+  const outerRadius = 1e6;
+  const positions: number[] = [];
+  for (let i = 0; i <= rings; i++) {
+    // Rings get farther apart as they go out, so there's detail near the branch point.
+    const r = innerRadius * Math.pow(outerRadius / innerRadius, i / rings);
+    for (let j = 0; j <= segments; j++) {
+      positions.push(r, -Math.PI + (2 * Math.PI * j) / segments, 0);
+    }
+  }
+  const indices: number[] = [];
+  const columns = segments + 1;
+  for (let i = 0; i < rings; i++) {
+    for (let j = 0; j < segments; j++) {
+      const a = i * columns + j;
+      const b = a + columns;
+      indices.push(a, b, a + 1, a + 1, b, b + 1);
+    }
+  }
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+  geometry.setIndex(indices);
+  return geometry;
+}
 
 type LabelInfo = { text: string; x: number; z: number; title: boolean };
 
@@ -103,38 +172,41 @@ export class Floor {
       vertexShader,
       fragmentShader,
       uniforms: {
+        ...floorUniforms,
         uScale: { value: 1 },
         uMajor: { value: 1 },
         uMinor: { value: 0.2 },
-        uSheetDir: { value: new THREE.Vector2(1, 0) },
         uSheetMix: { value: 0 },
+        uRainbow: {
+          value: MY_RAINBOW.map((hex) => shaderColor(hex).multiplyScalar(RAINBOW_BRIGHTNESS)),
+        },
         uFogColor: { value: shaderColor(SKY_COLOR) },
         uFogDensity: { value: FOG_DENSITY },
       },
+      // Both sides, in case the 3D floor tilts a piece away from the camera.
+      side: THREE.DoubleSide,
     });
-    const geometry = new THREE.PlaneGeometry(3000, 3000);
-    geometry.rotateX(-Math.PI / 2);
-    this.mesh = new THREE.Mesh(geometry, this.material);
+    this.mesh = new THREE.Mesh(polarGeometry(), this.material);
+    // The vertex shader moves everything, so three.js can't know where the floor is.
+    this.mesh.frustumCulled = false;
   }
 
-  update(
-    scale: number,
-    cameraPosition: THREE.Vector3,
-    sheetDirection: Complex,
-    sheetMix: number
-  ) {
-    // The plane follows the camera so it looks infinite.  The shader works in world coordinates.
-    this.mesh.position.set(cameraPosition.x, 0, cameraPosition.z);
+  update(scale: number, sheetMix: number) {
     const { major, minor } = gridSpacing(scale);
     const u = this.material.uniforms;
     u.uScale.value = scale;
     u.uMajor.value = major;
     u.uMinor.value = minor;
-    u.uSheetDir.value.set(sheetDirection.re, sheetDirection.im);
     u.uSheetMix.value = sheetMix;
     if (scale != this.labelScale) {
       this.labelScale = scale;
       this.updateLabels(scale, major);
+    }
+    // The 3D floor moves up and down, so the labels have to follow it.
+    for (const sprite of this.sprites) {
+      if (sprite.visible) {
+        sprite.position.y = floorHeight(sprite.position.x, sprite.position.z) + 0.05;
+      }
     }
   }
 
