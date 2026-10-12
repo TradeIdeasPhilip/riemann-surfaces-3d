@@ -15,6 +15,8 @@
       <main id="mainView">
         <canvas id="scene"></canvas>
         <div id="toast"></div>
+        <!-- The narrated tour shows its script here. -->
+        <div id="caption" hidden></div>
         <!-- Shows up while a demo is running. -->
         <div id="demoStatus" hidden>
           <div class="line">
@@ -42,6 +44,12 @@
               <button id="exploreMode" title="Shortcut: C">👁 Move camera only</button>
             </div>
             <div class="label">Demos</div>
+            <div class="row narrated">
+              <button id="demoNarrated" class="demo">▶ Narrated tour (√z, then log z)</button>
+              <label title="Show the script while the narrated tour runs"
+                ><input type="checkbox" id="showCaptions" checked /> Script</label
+              >
+            </div>
             <div id="sqrtDemos" class="demos">
               <button id="demoCircle" class="demo">Walk z around the branch point</button>
               <button id="demoMiss" class="demo">Walk a loop that misses it</button>

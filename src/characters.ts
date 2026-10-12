@@ -221,7 +221,7 @@ export class Character {
         this.fadeTo("Idle");
       } else if (speed < 6.5) {
         this.fadeTo("Walking");
-        this.current!.setEffectiveTimeScale(THREE.MathUtils.clamp(speed / 3.2, 0.5, 2.2));
+        this.current!.setEffectiveTimeScale(THREE.MathUtils.clamp(speed / 3.2, 0.2, 2.2));
       } else {
         this.fadeTo("Running");
         this.current!.setEffectiveTimeScale(THREE.MathUtils.clamp(speed / 8, 0.7, 2.5));

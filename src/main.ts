@@ -14,6 +14,7 @@ import {
 } from "./complex";
 import { Floor } from "./floor";
 import { LOGARITHM, SQUARE_ROOT, type MultiFunction } from "./functions";
+import { lineTimes } from "./narration";
 import { OFF_SHEET_OPACITY, OFF_SHEET_TRAIL_OPACITY, Trail } from "./trail";
 import {
   BLOCK_RADIUS,
@@ -410,6 +411,10 @@ async function main() {
     remaining?(): number;
     /** Demos have a name.  The countdown shows up while a demo is running. */
     title?: string;
+    /** Use the framing exactly, instead of easing toward it.  For carefully timed camera moves. */
+    exactFraming?: boolean;
+    /** Narrated demos show what's being said. */
+    caption?(): string | undefined;
   };
   let autopilot: Autopilot | undefined;
 
@@ -1004,11 +1009,26 @@ async function main() {
     message: string;
   };
 
-  function tour(options: TourOptions) {
+  const TOUR_RISE_SECONDS = 1.2;
+  const TOUR_ORBIT_SECONDS = 12;
+  const TOUR_END_SECONDS = 11;
+
+  /** How long a tour takes, in seconds. */
+  function tourSeconds(options: TourOptions) {
+    return (
+      TOUR_RISE_SECONDS +
+      pathLength(options.path, START_SCALE) / options.speed +
+      TOUR_ORBIT_SECONDS +
+      TOUR_END_SECONDS
+    );
+  }
+
+  /** Make a tour.  The tour starts, and sets everything up, as soon as this is called. */
+  function tour(options: TourOptions): Autopilot {
     const { path, speed, high, low, orbit, between, orbitDirection } = options;
     const scale = START_SCALE;
-    const orbitSeconds = 12;
-    const endSeconds = 11;
+    const orbitSeconds = TOUR_ORBIT_SECONDS;
+    const endSeconds = TOUR_END_SECONDS;
     const smooth = THREE.MathUtils.smootherstep;
     /** Looking in toward the branch point, while walking around it. */
     const lookIn = (orbitDirection * Math.PI) / 2;
@@ -1058,14 +1078,16 @@ async function main() {
       plan: (from) => ({ seconds: orbitSeconds, end: from }),
     };
 
-    autopilot = asDemo(
+    return asDemo(
       sequence(
         player,
         [
           // 1. The floor rises in half a second.
           before(
             setup,
-            pause(player, 1.2, (t) => (liftSlider.value = String(options.lift * smooth(t, 0, 0.5))))
+            pause(player, TOUR_RISE_SECONDS, (t) =>
+              (liftSlider.value = String(options.lift * smooth(t, 0, 0.5)))
+            )
           ),
           // 2. z walks.  The camera drifts from the higher angle to the lower one, then keeps swaying.
           withCamera(
@@ -1109,7 +1131,7 @@ async function main() {
   function demoSurfaceTour() {
     const spacing = 2.4;
     const laps = 5;
-    tour({
+    autopilot = tour({
       path: (u) => {
         const theta = u * laps * TAU;
         return polar((TOUR_INNER + (spacing * theta) / TAU) / START_SCALE, TOUR_PATH_ANGLE + theta);
@@ -1135,11 +1157,11 @@ async function main() {
    * up, and every level gets two rings.  Then the camera walks clockwise around the branch point,
    * which takes it down one level, so the whole garage seems to rise.  That leaves z one level up.
    */
-  function demoLogTour() {
+  function logTourOptions(): TourOptions {
     const levels = 3;
     const laps = 2 * levels;
     const spacing = 1.2;
-    tour({
+    return {
       path: (u) => {
         const lap = u * laps;
         // Counterclockwise, up, for the first half.  Then clockwise, back down.
@@ -1160,7 +1182,411 @@ async function main() {
       title: "Surface tour (3D)",
       message:
         "That's the parking garage for log z. Each lap around the branch point took z up a level, or back down. The way down was farther out than the way up, so every level got two rings. Then the camera walked clockwise around the branch point, which took it down a level, so z ended up on the level above you. Drag to look around.",
+    };
+  }
+  function demoLogTour() {
+    autopilot = tour(logTourOptions());
+  }
+
+  //
+  // The narrated demo.  It follows full_script.md.  Every move is pinned to a line of the script, so
+  // the timing all comes from narration.ts.  Change when the lines are spoken, and the animation
+  // follows.
+  //
+
+  /**
+   * Speed up for the first `ramp` of the time, coast, then slow down for the last `ramp`.
+   * Maps time, 0 to 1, to distance, 0 to 1.
+   */
+  function easeEnds(u: number, ramp = 0.18) {
+    const v = 1 / (1 - ramp);
+    if (u < ramp) {
+      return (v * u * u) / (2 * ramp);
+    } else if (u > 1 - ramp) {
+      return 1 - (v * (1 - u) ** 2) / (2 * ramp);
+    } else {
+      return v * (u - ramp / 2);
+    }
+  }
+  /** Speed up at the start, but still be walking at full speed at the end.  For bumping into things. */
+  function easeStart(u: number, ramp = 0.1) {
+    const v = 1 / (1 - ramp / 2);
+    return u < ramp ? (v * u * u) / (2 * ramp) : v * (u - ramp / 2);
+  }
+
+  /** A move that happens between two times, in seconds from the start of the demo. */
+  type Move = {
+    from: number;
+    to: number;
+    /** Make the path when the move starts, from wherever the body is.  u goes from 0 to 1. */
+    make(start: Complex): (u: number) => Complex;
+    /** Called just before the move starts. */
+    onStart?(): void;
+  };
+
+  /** Walk straight toward or away from the branch point.  radius is in world units. */
+  function radialMove(from: number, to: number, radius: number, scale: number, ease = easeEnds): Move {
+    return {
+      from,
+      to,
+      make(start) {
+        const angle = arg(start);
+        const r0 = abs(start);
+        const r1 = radius / scale;
+        return (u) => polar(r0 + (r1 - r0) * ease(u), angle);
+      },
+    };
+  }
+
+  /** One leg of a walk around the branch point. */
+  type Leg =
+    /** Walk straight toward or away from the branch point, to this many world units from it. */
+    | { radial: number }
+    /** Walk once around the branch point.  1 for counterclockwise, -1 for clockwise. */
+    | { lap: 1 | -1 }
+    | { pause: number };
+
+  /**
+   * Fit some legs between two times, at a steady pace.  Pauses take exactly as long as they say.
+   * startRadius is how far from the branch point the body is when this starts, in world units.
+   */
+  function fitLegs(from: number, to: number, startRadius: number, scale: number, legs: Leg[]) {
+    let r = startRadius;
+    let distance = 0;
+    let pausing = 0;
+    const lengths = legs.map((leg) => {
+      let length = 0;
+      if ("radial" in leg) {
+        length = Math.abs(leg.radial - r);
+        r = leg.radial;
+      } else if ("lap" in leg) {
+        length = TAU * r;
+      } else {
+        pausing += leg.pause;
+      }
+      distance += length;
+      return length;
     });
+    const secondsPerUnit = Math.max(0, to - from - pausing) / Math.max(distance, 1e-9);
+    const moves: Move[] = [];
+    let t = from;
+    legs.forEach((leg, index) => {
+      if ("pause" in leg) {
+        t += leg.pause;
+        return;
+      }
+      const end = t + lengths[index] * secondsPerUnit;
+      if ("radial" in leg) {
+        moves.push(radialMove(t, end, leg.radial, scale));
+      } else {
+        moves.push({
+          from: t,
+          to: end,
+          make(start) {
+            const angle = arg(start);
+            const radius = abs(start);
+            return (u) => polar(radius, angle + leg.lap * TAU * easeEnds(u));
+          },
+        });
+      }
+      t = end;
+    });
+    return moves;
+  }
+
+  /**
+   * Moves a body along a list of moves that don't overlap.  Between moves it stands still.
+   * Returns a function to call every frame.  That returns the body's speed, in world units per second.
+   */
+  function follow(body: Body, moves: Move[]) {
+    let next = 0;
+    let path: ((u: number) => Complex) | undefined;
+    let current: Move | undefined;
+    const goTo = (target: Complex, dt: number) => {
+      const here = toWorld(body.z);
+      const there = toWorld(target);
+      const dx = there.x - here.x;
+      const dz = there.z - here.z;
+      moveBody(body, dx, dz);
+      const step = Math.hypot(dx, dz);
+      if (step > 1e-4) {
+        body.heading = turnToward(body.heading, headingToward(dx, dz), 8 * Math.max(dt, 1 / 60));
+      }
+      return dt > 0 ? step / dt : 0;
+    };
+    return (t: number, dt: number) => {
+      while (next < moves.length && moves[next].from <= t) {
+        // Finish the last move exactly, in case we skipped past its end.
+        if (path) {
+          goTo(path(1), 0);
+        }
+        current = moves[next++];
+        current.onStart?.();
+        path = current.make(body.z);
+      }
+      if (!current || !path) {
+        return 0;
+      }
+      const u = THREE.MathUtils.clamp((t - current.from) / Math.max(current.to - current.from, 1e-9), 0, 1);
+      return goTo(path(u), dt);
+    };
+  }
+
+  function demoNarrated() {
+    const lines = lineTimes();
+    const start = (id: string) => lines.get(id)!.start;
+    const end = (id: string) => lines.get(id)!.end;
+    /** Part way through a line.  0 is the start, 1 is the end. */
+    const during = (id: string, fraction: number) => start(id) + (end(id) - start(id)) * fraction;
+    const smooth = THREE.MathUtils.smootherstep;
+    const clamp = THREE.MathUtils.clamp;
+
+    //
+    // The knobs.
+    //
+    /** The 3D floor is on the whole time, at this setting, 0 to 1. */
+    const LIFT = 0.5;
+    /** Zoom levels.  World units per math unit. */
+    const SCALES = [START_SCALE, 12.5, 31.25];
+    /** Aim this far into the zone, in world units, so z walks right into the rope. */
+    const INTO_THE_ROPE = 2.8;
+    /** The first circle, in world units at the last zoom level. */
+    const FIRST_CIRCLE = 6;
+    /** Looking straight down, almost, so it looks like an ordinary plot of the complex plane. */
+    const overhead = { pitch: 1.3, distance: 46 };
+    /** The camera comes down to here.  See descentStart and descentEnd. */
+    const low = { pitch: 0.22, distance: 32 };
+    /** While the camera walks around the branch point. */
+    const orbit = { pitch: 0.38, distance: 30 };
+    /** The finale:  between the two sheets. */
+    const between = { pitch: 0.03, distance: 11 };
+    /** The camera starts down half way through this line, slowly at first, then stops suddenly. */
+    const descentStart = during("trackColors", 0.5);
+    const descentEnd = end("height") - 0.1;
+    /** When we switch to log. */
+    const switchToLog = end("another") + 0.3;
+
+    //
+    // Set up the opening:  √z, standing at −4𝒾, looking at the branch point.
+    //
+    if (fn != SQUARE_ROOT) {
+      setFunction(SQUARE_ROOT);
+    }
+    reset();
+    sheetCheckbox.checked = false;
+    offSheetSelect.value = "solid";
+    liftSlider.value = String(LIFT);
+    floorUniforms.uLift.value = LIFT * fn.maxLift;
+
+    //
+    // z's moves.
+    //
+    const zMoves: Move[] = [
+      // Walk toward 0, weaving a little, right into the rope.
+      {
+        from: end("walk") - 0.6,
+        to: start("whoops") - 0.2,
+        make(from) {
+          const r0 = abs(from) * SCALES[0];
+          return (u) => {
+            const r = r0 + (INTO_THE_ROPE - r0) * easeStart(u);
+            const weave = 3.5 * Math.sin(3 * Math.PI * u) * (1 - u);
+            return { re: weave / SCALES[0], im: -r / SCALES[0] };
+          };
+        },
+      },
+      // Zoom in, then walk closer.
+      radialMove(start("onlyZero"), end("onlyZero") + 0.3, 4.4, SCALES[1]),
+      // Zoom in again, and walk closer.
+      radialMove(during("furtherIn", 0.5), end("furtherIn") + 0.2, 6, SCALES[2]),
+      // Right into the rope again.
+      radialMove(start("notAllowed"), end("notAllowed") - 0.3, INTO_THE_ROPE, SCALES[2], easeStart),
+      // Step back out to the first circle.
+      radialMove(start("important"), end("important") + 0.4, FIRST_CIRCLE, SCALES[2]),
+      // Three circles, each one ending at the same spot.
+      ...fitLegs(start("circle") + 0.6, end("sameValues") - 0.2, FIRST_CIRCLE, SCALES[2], [
+        { lap: 1 },
+        { pause: 0.8 },
+        { radial: FIRST_CIRCLE + 1.4 },
+        { lap: 1 },
+        { radial: FIRST_CIRCLE },
+        { pause: 0.8 },
+        { radial: FIRST_CIRCLE + 3 },
+        { lap: 1 },
+        { radial: FIRST_CIRCLE },
+      ]),
+      // Expanding circles, pausing after each one.
+      ...fitLegs(start("continuous") + 0.2, start("notReally") - 0.5, FIRST_CIRCLE, SCALES[2], [
+        { radial: FIRST_CIRCLE + 2.4 },
+        { lap: 1 },
+        { pause: 0.5 },
+        { radial: FIRST_CIRCLE + 4.8 },
+        { lap: 1 },
+        { pause: 0.5 },
+        { radial: FIRST_CIRCLE + 7.2 },
+        { lap: 1 },
+        { pause: 0.5 },
+        { radial: FIRST_CIRCLE + 9.6 },
+        { lap: 1 },
+      ]),
+    ];
+
+    //
+    // The camera walks once around the branch point while z stands still.
+    //
+    let orbitYaw = 0;
+    const lookIn = Math.PI / 2;
+    const eyeMoves: Move[] = [
+      {
+        from: start("notReally"),
+        to: end("identical"),
+        onStart() {
+          // Face along the circle, without moving the camera.
+          const angle = arg(eye.z);
+          const tangent = headingToward(-Math.sin(angle), -Math.cos(angle));
+          orbitYaw = wrapAngle(cameraRig.yawOffset + eye.heading - tangent);
+          eye.heading = tangent;
+        },
+        make(from) {
+          const angle = arg(from);
+          const radius = abs(from);
+          return (u) => polar(radius, angle + TAU * easeEnds(u, 0.12));
+        },
+      },
+    ];
+
+    //
+    // Zooming.
+    //
+    const zooms = [
+      { from: start("zoomIn") + 0.2, to: end("zoomIn") + 0.6, scales: [SCALES[0], SCALES[1]] },
+      { from: start("furtherIn") + 0.2, to: during("furtherIn", 0.5), scales: [SCALES[1], SCALES[2]] },
+    ];
+    function zoomAt(t: number) {
+      let result: number | undefined;
+      for (const zoom of zooms) {
+        if (t >= zoom.from) {
+          const u = smooth(t, zoom.from, zoom.to);
+          result = zoom.scales[0] * Math.pow(zoom.scales[1] / zoom.scales[0], u);
+        }
+      }
+      return result;
+    }
+
+    //
+    // Things that happen once.
+    //
+    const events: { at: number; run(): void }[] = [
+      { at: 0.4, run: () => zCharacter.emote("Wave") },
+      { at: start("right") + 0.2, run: () => cast.characters.forEach((c) => c.emote("Wave")) },
+      { at: start("whoops"), run: () => zCharacter.emote("No") },
+      { at: end("notAllowed"), run: () => zCharacter.emote("No") },
+      {
+        // Cut to looking down from high above, like an ordinary plot.  The camera holds still.
+        at: start("important"),
+        run() {
+          parkCamera(
+            polar(TOUR_INNER / SCALES[2], TOUR_CAMERA_ANGLE),
+            polar(1, TOUR_CAMERA_ANGLE + Math.PI),
+            overhead.pitch,
+            overhead.distance
+          );
+          sheetCheckbox.checked = true;
+        },
+      },
+      {
+        at: switchToLog,
+        run() {
+          // Switching functions stops any demo, including this one.  Keep going.
+          setFunction(LOGARITHM);
+          logTour = tour(logTourOptions());
+          autopilot = narrated;
+        },
+      },
+    ];
+
+    /** The camera, from when it parks until we switch to log. */
+    function cameraAt(t: number): CameraFraming | undefined {
+      if (t < start("important")) {
+        // Follow z, the usual way.
+        return undefined;
+      }
+      if (t < start("notReally")) {
+        // Hold still, high up.  Then come down, slowly at first, and stop suddenly.
+        const u = clamp((t - descentStart) / (descentEnd - descentStart), 0, 1);
+        const k = u * u;
+        return {
+          pitch: overhead.pitch + (low.pitch - overhead.pitch) * k,
+          distance: overhead.distance + (low.distance - overhead.distance) * k,
+          yawOffset: 0,
+        };
+      }
+      if (t < start("oneSurface")) {
+        // Walk around the branch point, looking in.
+        const k = smooth(t, start("notReally"), start("notReally") + 2);
+        return {
+          pitch: low.pitch + (orbit.pitch - low.pitch) * k,
+          distance: low.distance + (orbit.distance - low.distance) * k,
+          yawOffset: orbitYaw + wrapAngle(lookIn - orbitYaw) * k,
+        };
+      }
+      // The finale.  Down between the sheets, looking at the branch point, then turn toward z.
+      const t0 = start("oneSurface");
+      const down = smooth(t, t0, t0 + 3);
+      return {
+        pitch: orbit.pitch + (between.pitch - orbit.pitch) * down,
+        distance: orbit.distance + (between.distance - orbit.distance) * down,
+        yawOffset: lookIn - 1.75 * smooth(t, t0 + 4, switchToLog),
+      };
+    }
+
+    const moveZ = follow(player, zMoves);
+    const moveEye = follow(eye, eyeMoves);
+    const logSeconds = tourSeconds(logTourOptions());
+    let logTour: Autopilot | undefined;
+    let t = 0;
+    let fired = 0;
+    events.sort((a, b) => a.at - b.at);
+
+    const narrated: Autopilot = {
+      get body() {
+        return logTour?.body ?? player;
+      },
+      title: "Narrated tour",
+      get framing() {
+        return logTour ? logTour.framing : cameraAt(t);
+      },
+      get exactFraming() {
+        return !logTour;
+      },
+      remaining: () => (logTour ? logTour.remaining?.() ?? 0 : switchToLog - t + logSeconds),
+      caption() {
+        // The line being spoken, until a moment after it ends.
+        let result: string | undefined;
+        for (const { line, start, end } of lines.values()) {
+          if (t >= start && t < end + 1.2) {
+            result = line.text;
+          }
+        }
+        return result;
+      },
+      step(dt) {
+        t += dt;
+        while (fired < events.length && events[fired].at <= t) {
+          events[fired++].run();
+        }
+        if (logTour) {
+          return logTour.step(dt);
+        }
+        const scale = zoomAt(t);
+        if (scale !== undefined) {
+          view.scale = targetScale = scale;
+        }
+        moveEye(t, dt);
+        return moveZ(t, dt);
+      },
+    };
+    autopilot = narrated;
   }
   getById("demoCircle").addEventListener("click", demoCircle);
   getById("demoMiss").addEventListener("click", demoMiss);
@@ -1168,6 +1594,7 @@ async function main() {
   getById("demoCamera").addEventListener("click", demoCamera);
   getById("demoSpiralStill").addEventListener("click", demoSpiralStillCamera);
   getById("demoSurfaceTour").addEventListener("click", demoSurfaceTour);
+  getById("demoNarrated").addEventListener("click", demoNarrated);
 
   //
   // Log demos
@@ -1682,9 +2109,18 @@ async function main() {
   const demoBar = getById("demoBar");
   getById("demoStop").addEventListener("click", () => (autopilot = undefined));
   let shownDemo: Autopilot | undefined;
+  const captionElement = getById("caption");
+  const captionCheckbox = getById<HTMLInputElement>("showCaptions");
+  let shownCaption: string | undefined;
   /** The longest the current demo has had left.  For the progress bar. */
   let demoTotal = 0;
   function updateDemoStatus() {
+    const caption = captionCheckbox.checked ? autopilot?.caption?.() : undefined;
+    if (caption != shownCaption) {
+      shownCaption = caption;
+      captionElement.textContent = caption ?? "";
+      captionElement.hidden = !caption;
+    }
     const demo = autopilot?.title ? autopilot : undefined;
     demoStatus.hidden = !demo;
     if (!demo) {
@@ -1851,7 +2287,11 @@ async function main() {
       }
     }
     const framing = autopilot?.framing;
-    if (framing && !pointer?.dragging) {
+    if (framing && autopilot?.exactFraming) {
+      cameraRig.pitch = framing.pitch;
+      cameraRig.distance = framing.distance;
+      cameraRig.yawOffset = framing.yawOffset;
+    } else if (framing && !pointer?.dragging) {
       const k = 1 - Math.exp(-dt * 2.5);
       cameraRig.pitch += (framing.pitch - cameraRig.pitch) * k;
       cameraRig.distance += (framing.distance - cameraRig.distance) * k;
@@ -1967,6 +2407,10 @@ async function main() {
     demoSpiralStillCamera,
     demoSurfaceTour,
     demoLogTour,
+    demoNarrated,
+    narrationTimes: () => [...lineTimes().values()].map(({ line, start, end }) => ({ id: line.id, start, end })),
+    zLevel2: () => zLevel(),
+    scale: () => view.scale,
     demoRemaining: () => autopilot?.remaining?.(),
     demoLogCircles,
     demoLogApproach,

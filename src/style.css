@@ -326,6 +326,35 @@ kbd {
   opacity: 1;
 }
 
+#caption {
+  position: absolute;
+  left: 50%;
+  bottom: 24px;
+  transform: translateX(-50%);
+  width: max-content;
+  max-width: min(760px, calc(100% - 32px));
+  padding: 8px 16px;
+  border-radius: 8px;
+  background: rgba(8, 10, 20, 0.78);
+  font-size: 19px;
+  line-height: 1.35;
+  text-align: center;
+  pointer-events: none;
+}
+
+#caption[hidden] {
+  display: none;
+}
+
+.row.narrated {
+  align-items: center;
+}
+
+.row.narrated > button {
+  flex: 1;
+  text-align: left;
+}
+
 #demoStatus {
   position: absolute;
   top: 12px;
