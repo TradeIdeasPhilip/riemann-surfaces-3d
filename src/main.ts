@@ -1581,8 +1581,9 @@ async function main() {
       return {
         pitch: orbit.pitch + (between.pitch - orbit.pitch) * down,
         distance: orbit.distance + (between.distance - orbit.distance) * down,
-        // Keep turning slowly, the whole time, until we switch to log.
-        yawOffset: lookIn - 2.4 * smooth(t, t0 + 4, switchToLog),
+        // Keep turning slowly, the whole time, until we switch to log.  Don't turn more than this:
+        // any farther and the column gets between the camera and the eye, and the camera jumps.
+        yawOffset: lookIn - 1.75 * smooth(t, t0 + 4, switchToLog),
       };
     }
 
