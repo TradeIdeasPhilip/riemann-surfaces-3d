@@ -128,6 +128,8 @@ export const MOMENTS = {
   /** Zoom again on "As I zoom in further and further" (file 73.46 s). */
   zoomInAgain: 71.5,
   zoomInAgainEnd: 73.0,
+  /** Switch to log, just after "Are you ready for another function?" (from the timeline). */
+  logStart: 186.2197,
 };
 
 export type Timing = { readonly line: Line; readonly start: number; readonly end: number };

@@ -34,12 +34,12 @@
                 "source": "./Narrated Tour.m4a",
                 "startMsIntoScene": 1000,
                 "startMsIntoClip": 3040.498,
-                "lengthMs": 158359.502,
+                "lengthMs": 155981.4,
                 "notes": "Voiceover 1/3"
               },
               {
                 "source": "./Narrated Tour.m4a",
-                "startMsIntoScene": 165280,
+                "startMsIntoScene": 158001.780078,
                 "startMsIntoClip": 165280,
                 "lengthMs": 35390,
                 "notes": "Voiceover 2/3"

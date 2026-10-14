@@ -1369,7 +1369,7 @@ async function main() {
     const descentStart = during("trackColors", 0.5);
     const descentEnd = end("height") - 0.1;
     /** When we switch to log. */
-    const switchToLog = end("another") + 0.3;
+    const switchToLog = MOMENTS.logStart;
 
     //
     // Set up the opening:  √z, standing at −4𝒾, looking at the branch point.
@@ -1581,7 +1581,8 @@ async function main() {
       return {
         pitch: orbit.pitch + (between.pitch - orbit.pitch) * down,
         distance: orbit.distance + (between.distance - orbit.distance) * down,
-        yawOffset: lookIn - 1.75 * smooth(t, t0 + 4, switchToLog),
+        // Keep turning slowly, the whole time, until we switch to log.
+        yawOffset: lookIn - 2.4 * smooth(t, t0 + 4, switchToLog),
       };
     }
 
