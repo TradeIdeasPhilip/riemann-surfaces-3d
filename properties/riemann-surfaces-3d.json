@@ -2,6 +2,58 @@
   "formatVersion": 2,
   "videoKey": "riemann-surfaces-3d",
   "tree": {
-    "description": "Riemann Surfaces 3D"
+    "description": "Riemann Surfaces 3D",
+    "components": [
+      {
+        "registryKey": "Rectangle",
+        "schedules": [
+          {
+            "description": "Color",
+            "type": "color",
+            "value": "#121829"
+          },
+          {
+            "description": "Rect",
+            "type": "rectangle",
+            "value": {
+              "x": 0,
+              "y": 0,
+              "width": 16,
+              "height": 9
+            }
+          }
+        ]
+      },
+      {
+        "registryKey": "In Series",
+        "components": [
+          {
+            "registryKey": "Riemann: Narrated tour",
+            "soundClips": [
+              {
+                "source": "./Narrated Tour.m4a",
+                "startMsIntoScene": 0,
+                "startMsIntoClip": 0,
+                "lengthMs": 161400,
+                "notes": "Voiceover 1/3"
+              },
+              {
+                "source": "./Narrated Tour.m4a",
+                "startMsIntoScene": 165280,
+                "startMsIntoClip": 165280,
+                "lengthMs": 35390,
+                "notes": "Voiceover 2/3"
+              },
+              {
+                "source": "./Narrated Tour.m4a",
+                "startMsIntoScene": 207560,
+                "startMsIntoClip": 207560,
+                "notes": "Voiceover 3/3"
+              }
+            ]
+          }
+        ]
+      }
+    ]
   }
 }
