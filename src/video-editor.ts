@@ -97,7 +97,6 @@ export function openVideoEditor(app: VideoEditorApp) {
         step: app.step,
         render: app.render,
         status,
-        caption: app.caption,
       },
       canvases: [
         { description: "Input View", rect: LAYOUT.input },

@@ -107,6 +107,27 @@ export const MOMENTS = {
   zWaves: 3.06,
   /** The outputs wave on "…you see both answers." (file 13.30 s). */
   outputsWave: 11.26,
+  /** z walks into the rope, just after "…it involves history." (from the timeline). */
+  ropeBump: 46.4988,
+  /** After bumping into the rope, z keeps trying to walk this long, then stands still. */
+  pushingSeconds: 2.5,
+  /** z looks around the branch point, from "This is called a branch point." (file 54.32 s)… */
+  surveyStart: 52.28,
+  /** …until just before the outputs wave. */
+  surveyEnd: 60.7,
+  /** Blue waves on "…which solution is which" (file 63.24 s). */
+  blueWaves: 61.2,
+  /** Red waves as blue is almost done.  Blue's wave lasts 1.83 s. */
+  redWaves: 62.76,
+  /** Start zooming in, just after "Let's zoom in a little." (from the timeline). */
+  zoomIn: 65.7649,
+  zoomInEnd: 68.0,
+  /** Walk closer during "Really, the bad point is only at zero…" (file 68.80 s to 72.42 s). */
+  walkCloser: 68.0,
+  walkCloserEnd: 70.6,
+  /** Zoom again on "As I zoom in further and further" (file 73.46 s). */
+  zoomInAgain: 71.5,
+  zoomInAgainEnd: 73.0,
 };
 
 export type Timing = { readonly line: Line; readonly start: number; readonly end: number };

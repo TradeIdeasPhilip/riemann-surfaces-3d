@@ -1222,6 +1222,8 @@ async function main() {
     make(start: Complex): (u: number) => Complex;
     /** Called just before the move starts. */
     onStart?(): void;
+    /** Walk in place at this speed, in world units per second, instead of following the path. */
+    walkInPlace?: number;
   };
 
   /** Walk straight toward or away from the branch point.  radius is in world units. */
@@ -1327,6 +1329,9 @@ async function main() {
       if (!current || !path) {
         return 0;
       }
+      if (current.walkInPlace !== undefined) {
+        return t < current.to ? current.walkInPlace : 0;
+      }
       const u = THREE.MathUtils.clamp((t - current.from) / Math.max(current.to - current.from, 1e-9), 0, 1);
       return goTo(path(u), dt);
     };
@@ -1385,13 +1390,14 @@ async function main() {
       // Walk toward 0, weaving a little, right into the rope.
       {
         from: end("walk") - 0.6,
-        to: start("whoops") - 0.2,
+        // Arrive at the rope exactly now, still walking at full speed.
+        to: MOMENTS.ropeBump,
         make(from) {
           const r0 = abs(from) * SCALES[0];
           return (u) => {
             // How far along the walk, 0 to 1, by distance.
             const p = easeStart(u);
-            const r = r0 + (INTO_THE_ROPE - r0) * p;
+            const r = r0 + (BLOCK_RADIUS - r0) * p;
             // Three small bumps, the middle one biggest.  The envelope is 0 at both ends, so z
             // starts out heading straight at 0, and ends going straight into the rope.  This is
             // measured by distance, not time, so speeding up at the start doesn't bend the path.
@@ -1400,10 +1406,17 @@ async function main() {
           };
         },
       },
+      // Keep trying to walk into the rope for a moment.  Then stand still.
+      {
+        from: MOMENTS.ropeBump,
+        to: MOMENTS.ropeBump + MOMENTS.pushingSeconds,
+        walkInPlace: 4,
+        make: (from) => () => from,
+      },
       // Zoom in, then walk closer.
-      radialMove(start("onlyZero"), end("onlyZero") + 0.3, 4.4, SCALES[1]),
+      radialMove(MOMENTS.walkCloser, MOMENTS.walkCloserEnd, 4.4, SCALES[1]),
       // Zoom in again, and walk closer.
-      radialMove(during("furtherIn", 0.5), end("furtherIn") + 0.2, 6, SCALES[2]),
+      radialMove(MOMENTS.zoomInAgainEnd, end("furtherIn") + 0.2, 6, SCALES[2]),
       // Right into the rope again.
       radialMove(start("notAllowed"), end("notAllowed") - 0.3, INTO_THE_ROPE, SCALES[2], easeStart),
       // Step back out to the first circle.
@@ -1464,8 +1477,8 @@ async function main() {
     // Zooming.
     //
     const zooms = [
-      { from: start("zoomIn") + 0.2, to: end("zoomIn") + 0.6, scales: [SCALES[0], SCALES[1]] },
-      { from: start("furtherIn") + 0.2, to: during("furtherIn", 0.5), scales: [SCALES[1], SCALES[2]] },
+      { from: MOMENTS.zoomIn, to: MOMENTS.zoomInEnd, scales: [SCALES[0], SCALES[1]] },
+      { from: MOMENTS.zoomInAgain, to: MOMENTS.zoomInAgainEnd, scales: [SCALES[1], SCALES[2]] },
     ];
     function zoomAt(t: number) {
       let result: number | undefined;
@@ -1484,7 +1497,11 @@ async function main() {
     const events: { at: number; run(): void }[] = [
       { at: MOMENTS.zWaves, run: () => zCharacter.emote("Wave") },
       { at: MOMENTS.outputsWave, run: () => cast.characters.forEach((c) => c.emote("Wave")) },
-      { at: start("whoops"), run: () => zCharacter.emote("No") },
+      // Shake his head when he stops trying to walk.
+      { at: MOMENTS.ropeBump + MOMENTS.pushingSeconds, run: () => zCharacter.emote("No") },
+      // Blue, then red.  cast.characters is [red, blue].
+      { at: MOMENTS.blueWaves, run: () => cast.characters[1].emote("Wave") },
+      { at: MOMENTS.redWaves, run: () => cast.characters[0].emote("Wave") },
       { at: end("notAllowed"), run: () => zCharacter.emote("No") },
       {
         // Cut to looking down from high above, like an ordinary plot.  The camera holds still.
@@ -1511,8 +1528,25 @@ async function main() {
     ];
 
     /** The camera, from when it parks until we switch to log. */
+    /**
+     * While we talk about the branch point, z slowly looks to his left and back, and the camera
+     * rocks up and down a little.  0 to 1 and back to 0.
+     */
+    function surveyAt(t: number) {
+      return Math.sin(Math.PI * smooth(t, MOMENTS.surveyStart, MOMENTS.surveyEnd));
+    }
+
     function cameraAt(t: number): CameraFraming | undefined {
       if (t < start("important")) {
+        const survey = surveyAt(t);
+        if (survey > 0) {
+          // Follow z, the usual way, rocking a little.
+          return {
+            pitch: START_PITCH + 0.07 * Math.sin(2 * Math.PI * survey),
+            distance: START_DISTANCE,
+            yawOffset: 0,
+          };
+        }
         // Follow z, the usual way.
         return undefined;
       }
@@ -1588,6 +1622,7 @@ async function main() {
           view.scale = targetScale = scale;
         }
         moveEye(t, dt);
+        zCharacter.headTurn = 0.6 * surveyAt(t);
         return moveZ(t, dt);
       },
     };

@@ -107,6 +107,12 @@ export class Character {
   private readonly actions = new Map<string, THREE.AnimationAction>();
   private current?: THREE.AnimationAction;
   private emoting = false;
+  private headBone?: THREE.Object3D;
+  /**
+   * Turn the head, without the body, in radians.  Positive is to the robot's left.
+   * Every animation sets the head's rotation each frame, so this is added on top, fresh each frame.
+   */
+  headTurn = 0;
   private opacity = 1;
 
   /** nameplateSize is relative to the height of the view.  Small views need bigger nameplates. */
@@ -152,6 +158,11 @@ export class Character {
       mesh.material = copy;
     });
     this.root.add(model);
+    model.traverse((object) => {
+      if ((object as THREE.Bone).isBone && object.name == "Head") {
+        this.headBone = object;
+      }
+    });
     this.mixer = new THREE.AnimationMixer(model);
     for (const clip of gltf.animations) {
       const action = this.mixer.clipAction(clip);
@@ -228,6 +239,14 @@ export class Character {
       }
     }
     this.mixer.update(dt);
+    const head = this.headBone;
+    if (head && this.headTurn != 0) {
+      // Turn around the world's up direction, expressed in the head's own frame.
+      head.updateWorldMatrix(true, false);
+      const worldRotation = head.getWorldQuaternion(new THREE.Quaternion());
+      const up = new THREE.Vector3(0, 1, 0).applyQuaternion(worldRotation.invert());
+      head.quaternion.multiply(new THREE.Quaternion().setFromAxisAngle(up, this.headTurn));
+    }
   }
 
   setOpacity(opacity: number) {
