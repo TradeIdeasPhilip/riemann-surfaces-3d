@@ -1529,11 +1529,16 @@ async function main() {
 
     /** The camera, from when it parks until we switch to log. */
     /**
-     * While we talk about the branch point, z slowly looks to his left and back, and the camera
-     * rocks up and down a little.  0 to 1 and back to 0.
+     * While we talk about the branch point, z gently looks left and right, and the camera turns with
+     * his head and rocks up and down a little.  This fades in and out:  0 to 1 and back to 0.
      */
     function surveyAt(t: number) {
       return Math.sin(Math.PI * smooth(t, MOMENTS.surveyStart, MOMENTS.surveyEnd));
+    }
+    /** How far z turns his head, in radians.  Positive is left.  Two slow sways, about 12° each way. */
+    function headAt(t: number) {
+      const phase = (t - MOMENTS.surveyStart) / (MOMENTS.surveyEnd - MOMENTS.surveyStart);
+      return 0.2 * Math.sin(2 * TAU * phase) * surveyAt(t);
     }
 
     function cameraAt(t: number): CameraFraming | undefined {
@@ -1544,7 +1549,8 @@ async function main() {
           return {
             pitch: START_PITCH + 0.07 * Math.sin(2 * Math.PI * survey),
             distance: START_DISTANCE,
-            yawOffset: 0,
+            // Look where z is looking.
+            yawOffset: headAt(t),
           };
         }
         // Follow z, the usual way.
@@ -1622,7 +1628,7 @@ async function main() {
           view.scale = targetScale = scale;
         }
         moveEye(t, dt);
-        zCharacter.headTurn = 0.6 * surveyAt(t);
+        zCharacter.headTurn = headAt(t);
         return moveZ(t, dt);
       },
     };

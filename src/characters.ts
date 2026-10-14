@@ -113,6 +113,8 @@ export class Character {
    * Every animation sets the head's rotation each frame, so this is added on top, fresh each frame.
    */
   headTurn = 0;
+  /** The extra turn we added last frame, so we can take it back out. */
+  private headTurnApplied = new THREE.Quaternion();
   private opacity = 1;
 
   /** nameplateSize is relative to the height of the view.  Small views need bigger nameplates. */
@@ -238,14 +240,18 @@ export class Character {
         this.current!.setEffectiveTimeScale(THREE.MathUtils.clamp(speed / 8, 0.7, 2.5));
       }
     }
-    this.mixer.update(dt);
     const head = this.headBone;
+    // Take out last frame's turn first.  Not every animation resets the head every frame.
+    head?.quaternion.multiply(this.headTurnApplied.clone().invert());
+    this.headTurnApplied.identity();
+    this.mixer.update(dt);
     if (head && this.headTurn != 0) {
       // Turn around the world's up direction, expressed in the head's own frame.
       head.updateWorldMatrix(true, false);
       const worldRotation = head.getWorldQuaternion(new THREE.Quaternion());
       const up = new THREE.Vector3(0, 1, 0).applyQuaternion(worldRotation.invert());
-      head.quaternion.multiply(new THREE.Quaternion().setFromAxisAngle(up, this.headTurn));
+      this.headTurnApplied.setFromAxisAngle(up, this.headTurn);
+      head.quaternion.multiply(this.headTurnApplied);
     }
   }
 
