@@ -12,6 +12,7 @@ import {
   DurationAgnosticComponent,
   InSeriesComponent,
   RectangleComponent,
+  type SoundClip,
 } from "canvas-recorder-lib";
 import {
   FullScreenComponent,
@@ -87,7 +88,7 @@ export function openVideoEditor(app: VideoEditorApp) {
   }
 
   function makeDemo(name: string) {
-    return new FullScreenComponent({
+    const demo = new FullScreenComponent({
       registryKey: `Riemann: ${name}`,
       description: name,
       duration: durationOf(name),
@@ -109,6 +110,8 @@ export function openVideoEditor(app: VideoEditorApp) {
           ? [{ source: "./Narrated Tour.m4a", startMsIntoScene: 0, notes: "Voiceover" }]
           : undefined,
     });
+    madeDemos.push(demo);
+    return demo;
   }
 
   // Register every demo, so the Visual Editor can add any of them, and save and load them.
@@ -130,6 +133,92 @@ export function openVideoEditor(app: VideoEditorApp) {
   root.replaceableComponents!.push(background, demos);
 
   canvasRecorder.start(root, { name: "riemann-surfaces-3d" });
+  philDebug.cutSound = cutSound;
+  /** Every sound clip in our demos, as a table.  Times in ms. */
+  philDebug.listSounds = () =>
+    console.table(madeDemos.flatMap((demo) => (demo.parent ? (demo.soundClips ?? []) : [])));
+}
+
+//
+// Console tools.  philDebug is the library's object for things to call from the browser's console.
+//
+
+const philDebug = (globalThis as unknown as { philDebug: Record<string, unknown> }).philDebug;
+
+/** Every demo component we've made, so the console tools can find the one in the video. */
+const madeDemos: FullScreenComponent[] = [];
+
+/**
+ * Cut holes out of a sound clip, without moving anything else.  Each clip that plays from `source`
+ * becomes one clip per piece that's left, each playing at exactly the same moment as before.
+ *
+ * `holes` are `[fromMs, toMs]` pairs, measured from the start of the sound *file*, like the times in
+ * properties/Narrated Tour.transcript.json.
+ *
+ * For example, the two retakes in the first recording:
+ * `philDebug.cutSound("./Narrated Tour.m4a", [[161400, 165280], [200670, 207560]])`
+ */
+function cutSound(source: string, holes: readonly (readonly [number, number])[]) {
+  const sorted = [...holes].sort((a, b) => a[0] - b[0]);
+  const report: { notes: string; fileFromMs: number; fileToMs: number | string; startMsIntoScene: number }[] = [];
+  let changed = 0;
+  for (const demo of madeDemos) {
+    const clips = demo.soundClips;
+    // Only the ones in the video have a parent.
+    if (!clips || !demo.parent) {
+      continue;
+    }
+    for (let index = clips.length - 1; index >= 0; index--) {
+      const clip = clips[index];
+      if (clip.source != source) {
+        continue;
+      }
+      // The part of the file this clip plays.
+      const from = clip.startMsIntoClip ?? 0;
+      const to = clip.lengthMs === undefined ? Infinity : from + clip.lengthMs;
+      const pieces: [number, number][] = [];
+      let start = from;
+      for (const [holeFrom, holeTo] of sorted) {
+        if (holeTo <= start || holeFrom >= to) {
+          continue;
+        }
+        if (holeFrom > start) {
+          pieces.push([start, holeFrom]);
+        }
+        start = Math.max(start, holeTo);
+      }
+      if (start < to) {
+        pieces.push([start, to]);
+      }
+      const replacements: SoundClip[] = pieces.map(([a, b], i) => ({
+        source,
+        startMsIntoScene: clip.startMsIntoScene + (a - from),
+        startMsIntoClip: a,
+        ...(b === Infinity ? {} : { lengthMs: b - a }),
+        notes: pieces.length > 1 ? `${clip.notes ?? "Sound"} ${i + 1}/${pieces.length}` : clip.notes,
+      }));
+      clips.splice(index, 1, ...replacements);
+      changed++;
+      for (const r of replacements) {
+        report.push({
+          notes: r.notes ?? "",
+          fileFromMs: r.startMsIntoClip!,
+          fileToMs: r.lengthMs === undefined ? "end of file" : r.startMsIntoClip! + r.lengthMs,
+          startMsIntoScene: r.startMsIntoScene,
+        });
+      }
+    }
+    if (changed) {
+      // Tell the editor, so it saves, and rebuild the sound.
+      demo.parent?.scheduleHasChanged();
+    }
+  }
+  (philDebug.refreshSounds as (() => void) | undefined)?.();
+  if (changed == 0) {
+    console.warn(`No sound clip plays "${source}".`);
+  } else {
+    console.table(report);
+  }
 }
 
 /**
