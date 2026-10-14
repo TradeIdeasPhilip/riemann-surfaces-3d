@@ -4,5 +4,9 @@ Riemann Surfaces 3D
   rectangle.rectSchedule.set({"x":0,"y":0,"width":16,"height":9});
   this.addFixed({ child: rectangle });
   const inSeries = new InSeriesComponent({ description: "In Series" });
-  // [WARNING: no howToGenerate for "Riemann: Narrated tour" — manual conversion needed]
+  // No howToGenerate for "Riemann: Narrated tour", so this makes one the way the Visual Editor does.
+  const narratedTour = componentRegistry.get("Riemann: Narrated tour")!.create() as FullScreenComponent;
+  narratedTour.postrollScalar.value = 5000;
+  narratedTour.soundClips = [{"source":"./Narrated Tour.m4a","startMsIntoScene":1000,"startMsIntoClip":3040.498,"lengthMs":155981.4,"notes":"Voiceover 1/3"},{"source":"./Narrated Tour.m4a","startMsIntoScene":158001.780078,"startMsIntoClip":165280,"lengthMs":35390,"notes":"Voiceover 2/3"},{"source":"./Narrated Tour.m4a","startMsIntoScene":194358.117564,"startMsIntoClip":207560,"notes":"Voiceover 3/3","lengthMs":40379.982}];
+  inSeries.addFixed({ child: narratedTour });
   this.addFixed({ child: inSeries });

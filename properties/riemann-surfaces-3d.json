@@ -29,6 +29,13 @@
         "components": [
           {
             "registryKey": "Riemann: Narrated tour",
+            "scalars": [
+              {
+                "description": "Postroll (ms)",
+                "type": "number",
+                "value": 5000
+              }
+            ],
             "soundClips": [
               {
                 "source": "./Narrated Tour.m4a",
@@ -48,7 +55,8 @@
                 "source": "./Narrated Tour.m4a",
                 "startMsIntoScene": 194358.117564,
                 "startMsIntoClip": 207560,
-                "notes": "Voiceover 3/3"
+                "notes": "Voiceover 3/3",
+                "lengthMs": 40379.982
               }
             ]
           }

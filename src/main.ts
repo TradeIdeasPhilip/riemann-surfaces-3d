@@ -1410,7 +1410,8 @@ async function main() {
       {
         from: MOMENTS.ropeBump,
         to: MOMENTS.ropeBump + MOMENTS.pushingSeconds,
-        walkInPlace: 4,
+        // Fast enough to run, not just walk.  Frantic, on purpose.
+        walkInPlace: 10,
         make: (from) => () => from,
       },
       // Zoom in, then walk closer.
