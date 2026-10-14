@@ -1389,8 +1389,13 @@ async function main() {
         make(from) {
           const r0 = abs(from) * SCALES[0];
           return (u) => {
-            const r = r0 + (INTO_THE_ROPE - r0) * easeStart(u);
-            const weave = 3.5 * Math.sin(3 * Math.PI * u) * (1 - u);
+            // How far along the walk, 0 to 1, by distance.
+            const p = easeStart(u);
+            const r = r0 + (INTO_THE_ROPE - r0) * p;
+            // Three small bumps, the middle one biggest.  The envelope is 0 at both ends, so z
+            // starts out heading straight at 0, and ends going straight into the rope.  This is
+            // measured by distance, not time, so speeding up at the start doesn't bend the path.
+            const weave = 1.2 * Math.sin(3 * Math.PI * p) * 4 * p * (1 - p);
             return { re: weave / SCALES[0], im: -r / SCALES[0] };
           };
         },
