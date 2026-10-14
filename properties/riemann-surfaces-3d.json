@@ -32,9 +32,9 @@
             "soundClips": [
               {
                 "source": "./Narrated Tour.m4a",
-                "startMsIntoScene": 0,
-                "startMsIntoClip": 0,
-                "lengthMs": 161400,
+                "startMsIntoScene": 1000,
+                "startMsIntoClip": 3040.498,
+                "lengthMs": 158359.502,
                 "notes": "Voiceover 1/3"
               },
               {

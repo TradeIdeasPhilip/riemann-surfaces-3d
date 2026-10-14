@@ -96,6 +96,19 @@ const LEAD_IN = 0.8;
  */
 export const RECORDED: Partial<Record<string, { start: number; end?: number }>> = {};
 
+/**
+ * Moments pinned to individual words in the voiceover, in seconds from the start of the demo.
+ * Found with the transcript (properties/Narrated Tour.transcript.json) and the sound clips in
+ * properties/riemann-surfaces-3d.json.  The first clip starts 1 s into the demo, at 3.0405 s into
+ * the file, so demo time = file time − 2.0405 s.
+ */
+export const MOMENTS = {
+  /** z waves on "…your input, Z," (file 5.10 s). */
+  zWaves: 3.06,
+  /** The outputs wave on "…you see both answers." (file 13.30 s). */
+  outputsWave: 11.26,
+};
+
 export type Timing = { readonly line: Line; readonly start: number; readonly end: number };
 
 function spokenSeconds(text: string) {

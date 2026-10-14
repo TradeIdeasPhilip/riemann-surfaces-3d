@@ -14,7 +14,7 @@ import {
 } from "./complex";
 import { Floor } from "./floor";
 import { LOGARITHM, SQUARE_ROOT, type MultiFunction } from "./functions";
-import { lineTimes } from "./narration";
+import { lineTimes, MOMENTS } from "./narration";
 import { OFF_SHEET_OPACITY, OFF_SHEET_TRAIL_OPACITY, Trail } from "./trail";
 import {
   BLOCK_RADIUS,
@@ -1477,8 +1477,8 @@ async function main() {
     // Things that happen once.
     //
     const events: { at: number; run(): void }[] = [
-      { at: 0.4, run: () => zCharacter.emote("Wave") },
-      { at: start("right") + 0.2, run: () => cast.characters.forEach((c) => c.emote("Wave")) },
+      { at: MOMENTS.zWaves, run: () => zCharacter.emote("Wave") },
+      { at: MOMENTS.outputsWave, run: () => cast.characters.forEach((c) => c.emote("Wave")) },
       { at: start("whoops"), run: () => zCharacter.emote("No") },
       { at: end("notAllowed"), run: () => zCharacter.emote("No") },
       {
