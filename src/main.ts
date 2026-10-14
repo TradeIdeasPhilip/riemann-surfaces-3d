@@ -1810,9 +1810,14 @@ async function main() {
   //
   // Keyboard
   //
+  /**
+   * Once the video editor takes over the page, the keyboard belongs to it.
+   * Otherwise typing in one of its text boxes would walk z around.
+   */
+  let videoEditorOpen = false;
   const keys = new Set<string>();
   window.addEventListener("keydown", (event) => {
-    if (event.metaKey || event.ctrlKey || event.altKey) {
+    if (videoEditorOpen || event.metaKey || event.ctrlKey || event.altKey) {
       return;
     }
     if (event.code == "KeyC" || event.code == "Tab") {
@@ -1986,6 +1991,9 @@ async function main() {
     { passive: false }
   );
   window.addEventListener("keydown", (event) => {
+    if (videoEditorOpen) {
+      return;
+    }
     if (event.code == "Equal" || event.code == "NumpadAdd") {
       zoomBy(1.25);
     } else if (event.code == "Minus" || event.code == "NumpadSubtract") {
@@ -2143,18 +2151,13 @@ async function main() {
   //
   // Readout
   //
-  let lastReadout = -Infinity;
-  function updateReadout() {
-    if (time - lastReadout < 0.1) {
-      return;
-    }
-    lastReadout = time;
-    const chip = (color: number) =>
-      `<span class="chip" style="background:#${color.toString(16).padStart(6, "0")}"></span>`;
+  /** What the readout shows, as data.  The readout draws this as HTML, and the video editor draws it on its canvas. */
+  function readoutInfo() {
     const outputs = fn.outputs(player.w);
-    const rows = outputs
-      .map((w, i) => `<tr><td>${chip(fn.outputColors[i])}${fn.name}</td><td>${format(w)}</td></tr>`)
-      .join("");
+    const rows = [
+      { color: Z_COLOR, label: "z", value: format(player.z) },
+      ...outputs.map((w, i) => ({ color: fn.outputColors[i], label: fn.name, value: format(w) })),
+    ];
     const { major } = gridSpacing(view.scale);
     const level = zLevel();
     let where: string;
@@ -2169,16 +2172,30 @@ async function main() {
     if (level != 0 && offSheetSelect.value == "fade") {
       where += ", so it's faded";
     }
+    const notes = [
+      where,
+      `Grid lines every ${+major.toPrecision(6)} · zone radius ${(BLOCK_RADIUS / view.scale).toPrecision(3)}`,
+    ];
+    if (mode == "explore") {
+      notes.push("Moving the camera only. z stays put.");
+    }
+    return { rows, notes };
+  }
+
+  let lastReadout = -Infinity;
+  function updateReadout() {
+    if (time - lastReadout < 0.1) {
+      return;
+    }
+    lastReadout = time;
+    const chip = (color: number) =>
+      `<span class="chip" style="background:#${color.toString(16).padStart(6, "0")}"></span>`;
+    const { rows, notes } = readoutInfo();
     readout.innerHTML = `
       <table>
-        <tr><td>${chip(Z_COLOR)}z</td><td>${format(player.z)}</td></tr>
-        ${rows}
+        ${rows.map(({ color, label, value }) => `<tr><td>${chip(color)}${label}</td><td>${value}</td></tr>`).join("")}
       </table>
-      <div class="small">
-        ${where}<br>
-        Grid lines every ${+major.toPrecision(6)} · zone radius ${(BLOCK_RADIUS / view.scale).toPrecision(3)}
-        ${mode == "explore" ? "<br>Moving the camera only. z stays put." : ""}
-      </div>`;
+      <div class="small">${notes.join("<br>")}</div>`;
   }
 
   //
@@ -2245,16 +2262,35 @@ async function main() {
     return speed;
   }
 
+  /** The browser calls this once per screen refresh, while the app is running on its own. */
   function frame(timestamp: number) {
     timer.update(timestamp);
     const dt = Math.min(timer.getDelta(), 0.05);
-    time += dt;
     fitToCanvas(renderer, camera);
     fitToCanvas(outputRenderer, outputCamera);
+    step(dt, readKeys());
+    render();
+  }
+
+  /** Draw both views. */
+  function render() {
+    renderer.render(scene, camera);
+    outputRenderer.render(outputScene, outputCamera);
+  }
+
+  /**
+   * Move everything forward by dt seconds.  This doesn't draw.
+   *
+   * The video editor calls this directly, with a fixed dt and no input, so the same
+   * time always gives the same picture.
+   * @param holdDemo Leave the demo where it is.  Everything else keeps moving, like the
+   * robots shifting their weight and the cloud drifting.  For the video editor's preroll.
+   */
+  function step(dt: number, input: ReturnType<typeof readKeys>, holdDemo = false) {
+    time += dt;
     updateScale(dt);
 
     // Move z or the floating camera.
-    const input = readKeys();
     const body = activeBody();
     const manual = input.forward != 0 || input.turn != 0 || input.strafe != 0;
     if (manual) {
@@ -2266,7 +2302,9 @@ async function main() {
     let speed = 0;
     let blocked = false;
     if (autopilot) {
-      speed = stepAutopilot(dt);
+      if (!holdDemo) {
+        speed = stepAutopilot(dt);
+      }
     } else if (manual) {
       body.heading += input.turn * TURN_SPEED * dt;
       const topSpeed = input.run ? RUN_SPEED : WALK_SPEED;
@@ -2380,8 +2418,6 @@ async function main() {
     branchPoint.update(dt, time, floorHeight);
     updateReadout();
     updateDemoStatus();
-    renderer.render(scene, camera);
-    outputRenderer.render(outputScene, outputCamera);
   }
 
   // Everyone waves hello.
@@ -2392,6 +2428,86 @@ async function main() {
   }, 700);
 
   renderer.setAnimationLoop(frame);
+
+  //
+  // Video editor
+  //
+  // Replace this page with canvas-recorder's editor, which records our two views to a video file.
+  // From then on the editor drives the clock:  it calls step() with a fixed dt and render() when it
+  // wants a picture.  Everything else here stays the same.
+  //
+  const NO_INPUT: ReturnType<typeof readKeys> = { forward: 0, turn: 0, strafe: 0, run: false };
+  /** The demos the editor can show, in the order of the buttons.  Each starts fresh, the same way every time. */
+  const editorDemos = [
+    { name: "Narrated tour", fn: SQUARE_ROOT, start: demoNarrated },
+    { name: "√z: Walk z around the branch point", fn: SQUARE_ROOT, start: demoCircle },
+    { name: "√z: Walk a loop that misses it", fn: SQUARE_ROOT, start: demoMiss },
+    { name: "√z: Spiral", fn: SQUARE_ROOT, start: demoSpiral },
+    { name: "√z: Walk the camera around it", fn: SQUARE_ROOT, start: demoCamera },
+    { name: "√z: Spiral, camera standing still", fn: SQUARE_ROOT, start: demoSpiralStillCamera },
+    { name: "√z: Surface tour (3D)", fn: SQUARE_ROOT, start: demoSurfaceTour },
+    { name: "log z: Circles at 2, 4, and 6", fn: LOGARITHM, start: demoLogCircles },
+    { name: "log z: Walk toward the branch point", fn: LOGARITHM, start: demoLogApproach },
+    { name: "log z: Spiral in, straight out", fn: LOGARITHM, start: demoLogSpiral },
+    { name: "log z: Pizza slice to rectangle", fn: LOGARITHM, start: demoLogRectangle },
+    { name: "log z: Parking garage (3D)", fn: LOGARITHM, start: demoLogGarage },
+    { name: "log z: Walk the camera around it", fn: LOGARITHM, start: demoCamera },
+    { name: "log z: Surface tour (3D)", fn: LOGARITHM, start: demoLogTour },
+  ];
+  getById("openVideoEditor").addEventListener("click", async () => {
+    videoEditorOpen = true;
+    keys.clear();
+    renderer.setAnimationLoop(null);
+    // The editor asks for exact pixel sizes.
+    renderer.setPixelRatio(1);
+    outputRenderer.setPixelRatio(1);
+    const { openVideoEditor } = await import("./video-editor");
+    openVideoEditor({
+      demoNames: editorDemos.map(({ name }) => name),
+      restart(demoName) {
+        const demo = editorDemos.find(({ name }) => name == demoName);
+        if (!demo) {
+          throw new Error(`Unknown demo: ${demoName}`);
+        }
+        // Back to the page's starting state, so every run is the same.
+        setFunction(demo.fn);
+        reset();
+        eye.z = START_Z;
+        eye.w = player.w;
+        eye.heading = Math.PI;
+        eyeHidden = false;
+        sheetCheckbox.checked = sheetCheckbox.defaultChecked;
+        liftSlider.value = liftSlider.defaultValue;
+        offSheetSelect.selectedIndex = 0;
+        floorUniforms.uLift.value = 0;
+        sheetMix = 0;
+        time = 0;
+        demo.start();
+      },
+      remainingSeconds: () => autopilot?.remaining?.(),
+      step: (dt, hold) => step(dt, NO_INPUT, hold),
+      render(sizes) {
+        const pairs = [
+          [renderer, camera],
+          [outputRenderer, outputCamera],
+        ] as const;
+        pairs.forEach(([r, c], i) => {
+          const { width, height } = sizes[i];
+          r.getSize(rendererSize);
+          if (rendererSize.x != width || rendererSize.y != height) {
+            r.setSize(width, height, false);
+            c.aspect = width / height;
+            c.updateProjectionMatrix();
+          }
+        });
+        render();
+        return [canvas, outputCanvas];
+      },
+      readout: readoutInfo,
+      caption: () => autopilot?.caption?.(),
+    });
+  });
+
   (window as unknown as { app: unknown }).app = {
     player,
     eye,

@@ -84,6 +84,13 @@ It's like a parking garage.
 Every time around the solutions switch places.
 But now we have an infinite number of solutions!
 
+> Start displaying the credits on top of the robots.
+> This has been mocked up in [the handwriting effect slide](https://github.com/TradeIdeasPhilip/canvas-recorder/blob/74271f085dcbcb4bb584b0262c2f3fbd5750bc2d/properties/shadow-test.txt#L47) in my canvas-recorder project.
+
+A brief aside:
+I had some help from Claude Code with this video.
+It's *my* creation, but Claude made it happen much more quickly.
+
 > The screen will be covered with youtube links for the last 20 seconds.
 The demo should stay live, but don't add anything interesting here.
 

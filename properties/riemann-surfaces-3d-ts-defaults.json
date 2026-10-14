@@ -1,0 +1,121 @@
+{
+  "formatVersion": 2,
+  "videoKey": "riemann-surfaces-3d",
+  "tree": {
+    "description": "Riemann Surfaces 3D",
+    "scalars": [
+      {
+        "description": "Min Duration",
+        "type": "number",
+        "value": 0
+      }
+    ],
+    "components": [
+      {
+        "registryKey": "Rectangle",
+        "schedules": [
+          {
+            "description": "Color",
+            "type": "color",
+            "value": "#121829"
+          },
+          {
+            "description": "Rect",
+            "type": "rectangle",
+            "value": {
+              "x": 0,
+              "y": 0,
+              "width": 16,
+              "height": 9
+            }
+          }
+        ]
+      },
+      {
+        "registryKey": "In Series",
+        "schedules": [],
+        "components": [
+          {
+            "registryKey": "Riemann: Narrated tour",
+            "schedules": [
+              {
+                "description": "Input View",
+                "type": "rectangle",
+                "value": {
+                  "x": 0,
+                  "y": 0,
+                  "width": 9,
+                  "height": 9
+                }
+              },
+              {
+                "description": "Output View",
+                "type": "rectangle",
+                "value": {
+                  "x": 9,
+                  "y": 2,
+                  "width": 7,
+                  "height": 7
+                }
+              },
+              {
+                "description": "Statistics",
+                "type": "rectangle",
+                "value": {
+                  "x": 9.25,
+                  "y": 0.2,
+                  "width": 6.5,
+                  "height": 1.7
+                }
+              },
+              {
+                "description": "Statistics Font Size",
+                "type": "number",
+                "value": 0.22
+              },
+              {
+                "description": "Caption",
+                "type": "rectangle",
+                "value": {
+                  "x": 0.25,
+                  "y": 7.1,
+                  "width": 8.5,
+                  "height": 1.75
+                }
+              },
+              {
+                "description": "Caption Font Size",
+                "type": "number",
+                "value": 0.25
+              }
+            ],
+            "scalars": [
+              {
+                "description": "Preroll (ms)",
+                "type": "number",
+                "value": 0
+              },
+              {
+                "description": "Postroll (ms)",
+                "type": "number",
+                "value": 0
+              },
+              {
+                "description": "Show Caption",
+                "type": "select",
+                "value": "show"
+              }
+            ],
+            "soundClips": [
+              {
+                "source": "./Narrated Tour.m4a",
+                "startMsIntoScene": 0,
+                "notes": "Voiceover"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

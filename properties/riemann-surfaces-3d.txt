@@ -1,0 +1,8 @@
+Riemann Surfaces 3D
+  const rectangle = new RectangleComponent({ description: "Rectangle" });
+  rectangle.colorSchedule.set("#121829");
+  rectangle.rectSchedule.set({"x":0,"y":0,"width":16,"height":9});
+  this.addFixed({ child: rectangle });
+  const inSeries = new InSeriesComponent({ description: "In Series" });
+  // [WARNING: no howToGenerate for "Riemann: Narrated tour" — manual conversion needed]
+  this.addFixed({ child: inSeries });
