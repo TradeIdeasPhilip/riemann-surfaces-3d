@@ -258,6 +258,13 @@ label.slider input {
   min-width: 56px;
 }
 
+.row.function > a.about {
+  align-self: center;
+  margin-left: 2px;
+  font-size: 18px;
+  text-decoration: none;
+}
+
 .row.show {
   align-items: center;
   gap: 14px;

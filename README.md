@@ -1,8 +1,12 @@
-# √z Walkabout
+# Riemann Walkabout
 
-A 3D, walk-around version of [Riemann Surfaces and Multi-Valued Functions](https://tradeideasphilip.github.io/riemann-surfaces/).
+Riemann surfaces in 3D, for √z and log z.  A walk-around version of
+[Riemann Surfaces and Multi-Valued Functions](https://tradeideasphilip.github.io/riemann-surfaces/).
 
-The floor is the complex plane. You steer **z** (green). The two square roots of z (red and blue)
+**[Try it live](https://tradeideasphilip.github.io/riemann-surfaces-3d/)** ·
+**[Watch the narrated tour on YouTube](https://www.youtube.com/watch?v=btTi0iAX6tw)**
+
+The floor is the complex plane. You steer **z** (green). Its outputs (red and blue for √z)
 walk wherever they have to, and everyone leaves a trail. A glowing column of mist sits on the branch
 point. It's infinitely tall, so from wherever the camera is, it hides the ray of floor directly behind
 the branch point. That ray is the branch cut, so whatever you can see is analytic.
@@ -87,3 +91,28 @@ good version.
 Robot model: "RobotExpressive" by [Tomás Laulhé (Quaternius)](https://quaternius.com/), CC0 1.0,
 with modifications by [Don McCurdy](https://donmccurdy.com/). Copied from the
 [three.js examples](https://github.com/mrdoob/three.js/tree/dev/examples/models/gltf/RobotExpressive).
+
+## Finding more 3D models like the robot
+
+The robot is a **rigged and animated 3D character**:  a mesh, plus a skeleton (the **rig**, with bones
+like Head and Arm.L), **animation clips** (Idle, Walking, Running, Wave, No, …), and **morph targets**
+(also called blend shapes) for facial expressions.  The file format is **glTF / GLB**.  Good search terms:
+"rigged animated character glTF", "CC0 animated character", "game-ready low poly character".
+
+- [Quaternius](https://quaternius.com):  the artist who made the robot.  Lots of free CC0 packs of
+  characters, animals and monsters, with animations already in them.  A consistent style, and the
+  easiest license.
+- [Poly Pizza](https://poly.pizza):  a search engine for free low-poly models, including all of
+  Quaternius, with previews in the browser.
+- [Kenney](https://kenney.nl/assets):  another huge CC0 library, with a few animated character sets.
+- [Sketchfab](https://sketchfab.com):  the biggest showcase.  Every model spins in the browser, and you
+  can play its animations.  Filter by "Downloadable", "Animated" and "Rigged".  Licenses vary, so check
+  each one.
+- [Mixamo](https://www.mixamo.com):  free from Adobe.  Hundreds of human motion clips, and it can rig
+  a character you upload.  Downloads are FBX; Blender converts them to glTF.
+- [three.js examples](https://threejs.org/examples/?q=skinning):  search "skinning" or "animation".
+  That's where the robot came from, along with a soldier and a dancer, each with working code.
+- [glTF viewer](https://gltf-viewer.donmccurdy.com):  drop in a GLB file to see its animations, morph
+  targets and skeleton before you decide to use it.
+
+CC0 (Quaternius, Kenney) is the easiest choice for videos:  no credit required, and safe for YouTube.

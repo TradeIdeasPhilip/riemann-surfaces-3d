@@ -133,6 +133,8 @@ export function openVideoEditor(app: VideoEditorApp) {
 
   canvasRecorder.start(root, { name: "riemann-surfaces-3d" });
   philDebug.cutSound = cutSound;
+  /** The demo components in the video.  For poking at from the console, e.g. `philDebug.demos()[0].prerollScalar.value`. */
+  philDebug.demos = () => madeDemos.filter((demo) => demo.parent);
   /** Every sound clip in our demos, as a table.  Times in ms. */
   philDebug.listSounds = () =>
     console.table(madeDemos.flatMap((demo) => (demo.parent ? (demo.soundClips ?? []) : [])));
