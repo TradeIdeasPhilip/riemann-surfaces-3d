@@ -10,12 +10,17 @@
   },
   "dependencies": {
     "@fontsource/roboto": "^5.3.0",
-    "canvas-recorder-lib": "file:../canvas-recorder-lib",
+    "canvas-recorder-lib": "^0.5.0",
     "three": "^0.186.1"
   },
   "devDependencies": {
     "@types/three": "^0.186.0",
     "typescript": "^6.0.3",
     "vite": "^8.3.4"
+  },
+  "allowScripts": {
+    "onnxruntime-node": false,
+    "protobufjs": false,
+    "fsevents": true
   }
 }
