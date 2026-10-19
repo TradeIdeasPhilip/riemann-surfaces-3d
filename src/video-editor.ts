@@ -12,13 +12,16 @@ import {
   DurationAgnosticComponent,
   InSeriesComponent,
   RectangleComponent,
+  type Showable,
   type SoundClip,
 } from "canvas-recorder-lib";
+import { buildComponents } from "canvas-recorder-lib/src/slide-components/serialize";
 import {
   FullScreenComponent,
   type PixelSize,
   type StatusLine,
 } from "./full-screen-component";
+import initialTimeline from "./initial-timeline.json";
 
 /** What main.ts gives us. */
 export type VideoEditorApp = {
@@ -109,7 +112,6 @@ export function openVideoEditor(app: VideoEditorApp) {
           ? [{ source: "./Narrated Tour.m4a", startMsIntoScene: 0, notes: "Voiceover" }]
           : undefined,
     });
-    madeDemos.push(demo);
     return demo;
   }
 
@@ -122,6 +124,11 @@ export function openVideoEditor(app: VideoEditorApp) {
   }
 
   const root = new DurationAgnosticComponent("Riemann Surfaces 3D");
+
+  // A FALLBACK:  a minimal starting point, just a background and the main demo.
+  // The published video's timeline, just below, replaces this.  It's here in case that's
+  // ever commented out, and because it's a good example of building an initial state in
+  // code:  worth copying for a new project.
   const background = new RectangleComponent({
     description: "Background",
     color: BACKGROUND,
@@ -131,13 +138,19 @@ export function openVideoEditor(app: VideoEditorApp) {
   demos.replaceableComponents!.push(makeDemo(MAIN_DEMO));
   root.replaceableComponents!.push(background, demos);
 
+  // The timeline the video was published with:  the voiceover's cuts, the credits, and so on.
+  // Copied from the Visual Editor.  This is where everyone starts, including on GitHub Pages, and
+  // it's what "TypeScript defaults" in the Load dialog goes back to.  Anyone's own saved work
+  // takes precedence over it, so it's a starting point, not a lock.
+  root.replaceableComponents!.replace(buildComponents(initialTimeline));
+
   canvasRecorder.start(root, { name: "riemann-surfaces-3d" });
   philDebug.cutSound = cutSound;
   /** The demo components in the video.  For poking at from the console, e.g. `philDebug.demos()[0].prerollScalar.value`. */
-  philDebug.demos = () => madeDemos.filter((demo) => demo.parent);
+  philDebug.demos = demosInVideo;
   /** Every sound clip in our demos, as a table.  Times in ms. */
   philDebug.listSounds = () =>
-    console.table(madeDemos.flatMap((demo) => (demo.parent ? (demo.soundClips ?? []) : [])));
+    console.table(demosInVideo().flatMap((demo) => demo.soundClips ?? []));
 }
 
 //
@@ -146,8 +159,24 @@ export function openVideoEditor(app: VideoEditorApp) {
 
 const philDebug = (globalThis as unknown as { philDebug: Record<string, unknown> }).philDebug;
 
-/** Every demo component we've made, so the console tools can find the one in the video. */
-const madeDemos: FullScreenComponent[] = [];
+/**
+ * The demo components in the video that's open now.  Not every one we've made:  the fallback
+ * timeline's demo still exists after the saved timeline replaces it, just not in the video.
+ */
+function demosInVideo(): FullScreenComponent[] {
+  const found: FullScreenComponent[] = [];
+  const visit = (component: Showable) => {
+    if (component instanceof FullScreenComponent) {
+      found.push(component);
+    }
+    component.children?.forEach(({ child }) => visit(child));
+  };
+  const root = (philDebug.VisualEditor as { rootComponent?: Showable } | undefined)?.rootComponent;
+  if (root) {
+    visit(root);
+  }
+  return found;
+}
 
 /**
  * Cut holes out of a sound clip, without moving anything else.  Each clip that plays from `source`
@@ -163,10 +192,9 @@ function cutSound(source: string, holes: readonly (readonly [number, number])[])
   const sorted = [...holes].sort((a, b) => a[0] - b[0]);
   const report: { notes: string; fileFromMs: number; fileToMs: number | string; startMsIntoScene: number }[] = [];
   let changed = 0;
-  for (const demo of madeDemos) {
+  for (const demo of demosInVideo()) {
     const clips = demo.soundClips;
-    // Only the ones in the video have a parent.
-    if (!clips || !demo.parent) {
+    if (!clips) {
       continue;
     }
     for (let index = clips.length - 1; index >= 0; index--) {
