@@ -16,9 +16,12 @@ const CLOUD_DEPTH = 100;
 
 const cloudVertexShader = /* glsl */ `
 varying vec3 vWorld;
+/** The middle of the cloud.  The cubic has three, and none at the origin. */
+varying vec2 vAxis;
 void main() {
   vec4 world = modelMatrix * vec4(position, 1.0);
   vWorld = world.xyz;
+  vAxis = (modelMatrix * vec4(0.0, 0.0, 0.0, 1.0)).xz;
   gl_Position = projectionMatrix * viewMatrix * world;
 }
 `;
@@ -31,6 +34,7 @@ uniform float uStrength;
 uniform vec3 uFogColor;
 uniform float uFogDensity;
 varying vec3 vWorld;
+varying vec2 vAxis;
 
 float hash(vec3 p) {
   p = fract(p * 0.3183099 + 0.1);
@@ -63,8 +67,8 @@ void main() {
   // How far does the line of sight pass from the axis of the cylinder, looking down from above?
   // 0 means straight through the middle, 1 means just grazing the edge.
   // Anything on the floor directly behind the branch point is seen with b = 0.
-  vec2 c = cameraPosition.xz;
-  vec2 d = normalize(vWorld.xz - c);
+  vec2 c = cameraPosition.xz - vAxis;
+  vec2 d = normalize(vWorld.xz - cameraPosition.xz);
   float signedB = (c.x * d.y - c.y * d.x) / uRadius;
   float b = clamp(abs(signedB), 0.0, 1.0);
   float y = vWorld.y;
@@ -73,7 +77,7 @@ void main() {
   // Swirling, rising mist.
   float twist = y * 0.12 + t * 0.35;
   mat2 rot = mat2(cos(twist), -sin(twist), sin(twist), cos(twist));
-  vec2 xz = rot * vWorld.xz;
+  vec2 xz = rot * (vWorld.xz - vAxis);
   float n = fbm(vec3(xz.x * 0.9, y * 0.28 - t * 0.6, xz.y * 0.9));
   float n2 = fbm(vec3(signedB * 2.5, y * 0.1 - t * 0.25, t * 0.05));
 
@@ -281,9 +285,10 @@ class Barrier {
     return (i / this.count) * Math.PI * 2;
   }
 
-  update(heightAt: (x: number, z: number) => number) {
+  /** offsetX and offsetZ say where the branch point is in the world.  The cones are relative to that. */
+  update(heightAt: (x: number, z: number) => number, offsetX: number, offsetZ: number) {
     for (const cone of this.cones) {
-      cone.position.y = heightAt(cone.position.x, cone.position.z);
+      cone.position.y = heightAt(cone.position.x + offsetX, cone.position.z + offsetZ);
     }
     const p = this.tapePositions;
     const half = Barrier.TAPE_WIDTH / 2;
@@ -363,8 +368,8 @@ class Sparkles {
 }
 
 /**
- * Everything at the branch point:  the cloud, the sparkles, the cones, and the tape.
- * The glow on the floor is drawn by the floor's shader.
+ * Everything at a branch point:  the cloud, the sparkles, the cones, and the tape.
+ * The glow on the floor is drawn by the floor's shader.  Move group to put it somewhere else.
  */
 export class BranchPoint {
   readonly group = new THREE.Group();
@@ -390,6 +395,6 @@ export class BranchPoint {
       cloud.material.uniforms.uTime.value = time;
     }
     this.sparkles.update(dt, time);
-    this.barrier.update(heightAt);
+    this.barrier.update(heightAt, this.group.position.x, this.group.position.z);
   }
 }

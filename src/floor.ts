@@ -86,16 +86,30 @@ void main() {
   vec3 color = plain;
 
   if (uSheetMix > 0.0) {
-    // Nine solid wedges of color, by the total angle around the branch point.  Red is centered on
-    // the positive real axis of the principal sheet.  All nine colors take two laps around the branch
-    // point, which is once around for √z itself.  So each sheet of √z, or each level of log, shows
-    // half of the rainbow, and the two edges of the cut, hidden behind the cloud, are about half a
-    // rainbow apart.
-    float total = uCameraTotal + cameraRelativeAngle(vWorld.xz) + F_TAU * uLevel;
-    float t = total * 9.0 / (2.0 * F_TAU) + 0.5;
+    float t;
+    float fw;
+    if (uFunction > 1.5) {
+      // The cubic:  nine wedges by the angle of w itself, on the camera's sheet.  That's the same rule
+      // as √z below, where the total angle is twice the angle of w.  The Riemann surface is the w plane,
+      // so each color is a wedge of the surface, laid out on the floor.
+      vec2 w = cubicCameraSheet(p);
+      t = atan(w.y, w.x) * 9.0 / F_TAU + 0.5;
+      // t jumps by 9 where the angle wraps around.  That's the same color, so ignore the jump.
+      vec2 slope = vec2(dFdx(t), dFdy(t));
+      slope -= 9.0 * floor(slope / 9.0 + 0.5);
+      fw = max(abs(slope.x) + abs(slope.y), 1e-6);
+    } else {
+      // Nine solid wedges of color, by the total angle around the branch point.  Red is centered on
+      // the positive real axis of the principal sheet.  All nine colors take two laps around the branch
+      // point, which is once around for √z itself.  So each sheet of √z, or each level of log, shows
+      // half of the rainbow, and the two edges of the cut, hidden behind the cloud, are about half a
+      // rainbow apart.
+      float total = uCameraTotal + cameraRelativeAngle(vWorld.xz) + F_TAU * uLevel;
+      t = total * 9.0 / (2.0 * F_TAU) + 0.5;
+      fw = max(fwidth(t), 1e-6);
+    }
     float k = floor(t);
     float f = t - k;
-    float fw = max(fwidth(t), 1e-6);
     // Sharp edges, but anti-aliased:  how much of this pixel is in the neighboring wedge?
     float below = clamp((0.5 * fw - f) / fw, 0.0, 1.0);
     float above = clamp((f + 0.5 * fw - 1.0) / fw, 0.0, 1.0);
@@ -103,8 +117,8 @@ void main() {
     color = mix(plain, wedge, uSheetMix);
   }
 
-  // The glow around the base of the cloud.
-  float d = length(vWorld.xz);
+  // The glow around the base of each cloud.
+  float d = branchDistanceWorld(vWorld.xz);
   float glow = (1.0 - smoothstep(0.0, 7.0, d)) * uGlow;
   color += mix(vec3(0.43, 0.47, 1.0), vec3(0.55, 0.86, 1.0), exp(-d / 1.5)) * 0.8 * glow * glow;
 
@@ -127,7 +141,7 @@ void main() {
   float alpha = 1.0;
   if (uGhost > 0.5) {
     alpha = uGhostBase + max(minor * 0.15, max(major * 0.45, axes * 0.6));
-    alpha *= (1.0 - smoothstep(uGhostFade.x, uGhostFade.y, d)) * uGhostFill;
+    alpha *= (1.0 - smoothstep(uGhostFade.x, uGhostFade.y, length(vWorld.xz))) * uGhostFill;
   }
 
   float dist = distance(vWorld, cameraPosition);
@@ -224,7 +238,10 @@ export type FloorOptions = {
   labelRange?: number;
   /** Don't put labels this close to the branch point, in world units.  They'd be in the cloud. */
   keepClear?: number;
-  /** The floor has a hole in the middle this big, in world units.  The cloud covers it. */
+  /**
+   * The floor has a hole in the middle this big, in world units.  For √ and log the cloud covers it.
+   * The cubic has no cloud in the middle, so the default is tiny.
+   */
   hole?: number;
 };
 
@@ -246,7 +263,7 @@ export class Floor {
     this.heightAt = options.heightAt ?? floorHeight;
     this.labelRange = options.labelRange ?? 160;
     this.keepClear = options.keepClear ?? TAPE_RADIUS + 0.8;
-    const geometry = polarGeometry(options.hole ?? 1);
+    const geometry = polarGeometry(options.hole ?? 0.02);
     for (let level = 0; level <= GHOST_LEVELS; level++) {
       const material = floorMaterial(level, options.uniforms ?? floorUniforms, options.glow ?? true);
       const mesh = new THREE.Mesh(geometry, material);

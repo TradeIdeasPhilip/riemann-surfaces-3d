@@ -5,15 +5,25 @@ import { BranchPoint, makeBlobShadow } from "./branchPoint";
 import { Character, FloatingEye, loadCharacterModel } from "./characters";
 import {
   abs,
+  add,
   arg,
   complex,
   dot,
   format,
+  multiply,
   negate,
+  times,
   type Complex,
 } from "./complex";
 import { Floor } from "./floor";
-import { LOGARITHM, SQUARE_ROOT, type MultiFunction } from "./functions";
+import {
+  CUBIC,
+  CUBIC_BRANCH_POINTS,
+  cubicValuesAt,
+  LOGARITHM,
+  SQUARE_ROOT,
+  type MultiFunction,
+} from "./functions";
 import { lineTimes, MOMENTS } from "./narration";
 import { OFF_SHEET_OPACITY, OFF_SHEET_TRAIL_OPACITY, Trail } from "./trail";
 import {
@@ -81,6 +91,7 @@ type Body = {
 
 /**
  * Where does the segment from a to b first touch the circle of radius r around the origin?
+ * For a circle somewhere else, subtract its center from a and b first.
  * Returns a fraction from 0 to 1, or 1 if it never does.  Assumes a is outside the circle.
  */
 function segmentEntry(ax: number, az: number, bx: number, bz: number, r: number) {
@@ -100,13 +111,14 @@ function segmentEntry(ax: number, az: number, bx: number, bz: number, r: number)
   return t >= 0 && t <= 1 ? t : 1;
 }
 
-/** Does the straight line from a to b pass within r of the origin?  All in math units. */
-function segmentNearOrigin(a: Complex, b: Complex, r: number) {
+/** Does the straight line from a to b pass within r of point?  All in math units. */
+function segmentNear(a: Complex, b: Complex, point: Complex, r: number) {
   const d = sub(b, a);
+  const from = sub(a, point);
   const lengthSquared = dot(d, d);
   const t =
-    lengthSquared > 0 ? Math.max(0, Math.min(1, -dot(a, d) / lengthSquared)) : 0;
-  return Math.hypot(a.re + t * d.re, a.im + t * d.im) < r;
+    lengthSquared > 0 ? Math.max(0, Math.min(1, -dot(from, d) / lengthSquared)) : 0;
+  return Math.hypot(from.re + t * d.re, from.im + t * d.im) < r;
 }
 
 async function main() {
@@ -167,8 +179,21 @@ async function main() {
   });
   outputScene.add(...outputFloor.meshes, outputFloor.labels);
 
-  const branchPoint = new BranchPoint();
-  scene.add(branchPoint.group);
+  // √ and log use the first one, at the origin.  The cubic uses all three.
+  const branchPoints = CUBIC_BRANCH_POINTS.map(() => new BranchPoint());
+  scene.add(...branchPoints.map((b) => b.group));
+  /** Put each cloud on its branch point.  Zooming moves them, except the one at the origin. */
+  function placeBranchPoints() {
+    branchPoints.forEach((b, i) => {
+      const where = fn.branchPoints[i];
+      b.group.visible = where !== undefined;
+      if (where) {
+        toWorld(where, 0, b.group.position);
+        floorUniforms.uBranches.value[i].set(b.group.position.x, b.group.position.z);
+      }
+    });
+    floorUniforms.uBranchCount.value = fn.branchPoints.length;
+  }
 
   // The nameplates draw with Roboto on a canvas, which won't wait for the font by itself.
   await Promise.all([
@@ -316,10 +341,12 @@ async function main() {
   const functionButtons = new Map<MultiFunction, HTMLButtonElement>([
     [SQUARE_ROOT, getById<HTMLButtonElement>("functionSqrt")],
     [LOGARITHM, getById<HTMLButtonElement>("functionLog")],
+    [CUBIC, getById<HTMLButtonElement>("functionCubic")],
   ]);
   const demoLists = new Map<MultiFunction, HTMLElement>([
     [SQUARE_ROOT, getById("sqrtDemos")],
     [LOGARITHM, getById("logDemos")],
+    [CUBIC, getById("cubicDemos")],
   ]);
   const title = getById("title");
   function setFunction(f: MultiFunction) {
@@ -347,7 +374,13 @@ async function main() {
     clearTrails();
     functionButtons.forEach((button, f) => button.classList.toggle("active", f == fn));
     demoLists.forEach((list, f) => (list.hidden = f != fn));
-    title.textContent = `${fn.name} Walkabout`;
+    title.textContent = `${fn.label} Walkabout`;
+    // The cubic doesn't have a 3D floor yet.
+    liftSlider.disabled = fn.maxLift == 0;
+    if (fn == CUBIC) {
+      // The floor's colors are the best way to see the cubic's sheets.
+      sheetCheckbox.checked = true;
+    }
   }
   functionButtons.forEach((button, f) => button.addEventListener("click", () => setFunction(f)));
 
@@ -386,16 +419,25 @@ async function main() {
     const start = toWorld(body.z);
     let x = start.x + dx;
     let z = start.z + dz;
-    const r = Math.hypot(x, z);
     let blocked = false;
-    if (r < BLOCK_RADIUS) {
-      x *= BLOCK_RADIUS / r;
-      z *= BLOCK_RADIUS / r;
-      const step = Math.hypot(dx, dz);
-      blocked = step > 0 && (dx * start.x + dz * start.z) / (step * start.length()) < -0.5;
+    // Twice, in case getting pushed out of one zone pushed you into another.
+    for (let pass = 0; pass < 2; pass++) {
+      for (const branch of fn.branchPoints) {
+        const center = toWorld(branch);
+        const r = Math.hypot(x - center.x, z - center.z);
+        if (r < BLOCK_RADIUS && r > 0) {
+          x = center.x + ((x - center.x) * BLOCK_RADIUS) / r;
+          z = center.z + ((z - center.z) * BLOCK_RADIUS) / r;
+          const step = Math.hypot(dx, dz);
+          const outX = start.x - center.x;
+          const outZ = start.z - center.z;
+          blocked ||= step > 0 && (dx * outX + dz * outZ) / (step * Math.hypot(outX, outZ)) < -0.5;
+        }
+      }
     }
+    const from = body.z;
     body.z = toMath(x, z);
-    body.w = fn.continueTo(body.z, body.w);
+    body.w = fn.continueTo(body.z, body.w, from);
     return blocked;
   }
 
@@ -477,7 +519,7 @@ async function main() {
 
   /**
    * A growing spiral, centered where the body starts.  The end of each loop lands on the line
-   * from the start through the branch point:
+   * from the start through the branch point (the origin, unless you give another one):
    *   1. half way from the start to the cones,
    *   2. just short of the cones,
    *   3. just past the forbidden zone, on the far side of the branch point,
@@ -488,14 +530,19 @@ async function main() {
    *
    * If moveCamera is true, the camera rises and backs away as the spiral grows.
    */
-  function spiralAutopilot(body: Body, onDone: () => void, moveCamera = true): Autopilot {
+  function spiralAutopilot(
+    body: Body,
+    onDone: () => void,
+    moveCamera = true,
+    branch = complex(0, 0)
+  ): Autopilot {
     const scale = view.scale;
     const center = body.z;
-    const startDistance = abs(center);
+    const startDistance = abs(sub(center, branch));
     /** Just outside the cones, in math units. */
     const margin = (BLOCK_RADIUS + 0.4) / scale;
     // Unit vectors toward the branch point, and 90° counterclockwise from that.
-    const u = normalize(negate(center));
+    const u = normalize(sub(branch, center));
     const v = { re: -u.im, im: u.re };
     // Distance from the center at the end of each loop.
     const radii = [
@@ -575,22 +622,31 @@ async function main() {
     };
   }
 
-  /** Walk to a point.  If the branch point is in the way, walk around it the short way. */
+  /** Walk to a point.  If a branch point is in the way, walk around it the short way. */
   function gotoAutopilot(body: Body, target: Complex): Autopilot {
-    let side = 0;
+    /** Which way we're going around each branch point, once we've picked. */
+    const sides = new Map<Complex, number>();
     function steer(): Complex | undefined {
       const toTarget = sub(target, body.z);
       if (abs(toTarget) * view.scale < 0.25) {
         return undefined;
       }
       const blockRadius = (BLOCK_RADIUS - 0.1) / view.scale;
-      if (!segmentNearOrigin(body.z, target, blockRadius)) {
+      // The nearest one in the way, if any.
+      const branch = fn.branchPoints
+        .filter((b) => segmentNear(body.z, target, b, blockRadius))
+        .sort((a, b) => abs(sub(body.z, a)) - abs(sub(body.z, b)))[0];
+      if (!branch) {
         return toTarget;
       }
-      if (side == 0) {
-        side = body.z.re * target.im - body.z.im * target.re >= 0 ? 1 : -1;
+      const from = sub(body.z, branch);
+      const to = sub(target, branch);
+      let side = sides.get(branch);
+      if (side === undefined) {
+        side = from.re * to.im - from.im * to.re >= 0 ? 1 : -1;
+        sides.set(branch, side);
       }
-      const out = normalize(body.z);
+      const out = normalize(from);
       return { re: -out.im * side + out.re * 0.3, im: out.re * side + out.im * 0.3 };
     }
     return {
@@ -845,7 +901,7 @@ async function main() {
     setMode("explore");
     autopilot = pilot;
     eye.z = target;
-    eye.w = fn.continueTo(target, player.w);
+    eye.w = fn.continueTo(target, player.w, player.z);
     eye.heading = headingToward(look.re, -look.im);
     eyeHidden = true;
     cameraRig.yawOffset = 0;
@@ -1857,6 +1913,362 @@ async function main() {
   getById("demoLogTour").addEventListener("click", demoLogTour);
 
   //
+  // Cubic demos.  w³ − zw − 2 = 0 has three branch points, at 3, 3ω, and 3ω².  Most of these start at
+  // z = 0, right in the middle, like the 2D version.  From there, the straight line out to each branch
+  // point is clear, and going around one of them trades two of the three values.
+  //
+
+  const ZERO = complex(0, 0);
+  /** How fast z walks around the loops, in world units per second. */
+  const LOOP_SPEED = 12;
+
+  /** Cubic demos use absolute positions, like z = 0, so they set the zoom.  And the floor's colors are the whole point. */
+  function startCubicDemo(scale = START_SCALE) {
+    setMode("walk");
+    clearTrails();
+    view.scale = targetScale = scale;
+    sheetCheckbox.checked = true;
+  }
+
+  /** Looking from here, none of the three clouds hides another:  south-east, half way between 3 and 3ω². */
+  const CUBIC_VIEW_FROM = polar(1, -Math.PI / 3);
+  /**
+   * Park the camera high above, looking at `look`, from the direction `from`, in math coordinates.
+   * The default looks at all three branch points.
+   */
+  function cubicOverview(look = complex(0, 0), from = CUBIC_VIEW_FROM, pitch = 1.1, distance = 62) {
+    parkCamera(look, negate(from), pitch, distance);
+  }
+
+  /**
+   * Does going around branch point b, from where the body is, trade z's own value?  Follow the
+   * straight line to b, and see if z's value is one of the two that meet there.
+   */
+  function movesOwnValue(body: Body, b: Complex) {
+    const near = add(b, times(normalize(sub(body.z, b)), 0.01));
+    const w = fn.continueTo(near, body.w, body.z);
+    const { double, single } = cubicValuesAt(b);
+    return abs(sub(w, double)) < abs(sub(w, single));
+  }
+  /** Pick a branch point that trades z's own value, so z changes sheets, and you can see it fade. */
+  function branchThatMovesZ() {
+    return CUBIC_BRANCH_POINTS.find((b) => movesOwnValue(player, b)) ?? CUBIC_BRANCH_POINTS[1];
+  }
+
+  /** Once around a circle through `start`, centered at center.  1 for counterclockwise, -1 for clockwise. */
+  function loopPath(start: Complex, center: Complex, direction: 1 | -1) {
+    const offset = sub(start, center);
+    return (u: number) => add(center, multiply(offset, polar(1, direction * TAU * u)));
+  }
+  /** From 0, once around branch point b.  Bigger sizes reach farther past it. */
+  function loopAround(b: Complex, direction: 1 | -1, size = 2) {
+    return loopPath(ZERO, times(b, size / 3), direction);
+  }
+
+  /** Follow a path.  make() makes it when the step starts.  guess is for the countdown. */
+  function pathStep(body: Body, make: () => (u: number) => Complex, speed: number, guess = make()): Step {
+    return {
+      start: () => pathAutopilot(body, make(), speed),
+      plan: () => ({ seconds: pathLength(guess) / speed, end: guess(1) }),
+    };
+  }
+
+  /** Each robot's place, at the start of the interesting part of a demo.  See describeShuffle(). */
+  let shuffleStart: Complex[] = [];
+  function rememberOutputs() {
+    shuffleStart = fn.outputs(player.w, cast.previous);
+  }
+  const ROBOT_NAMES = ["red", "blue", "yellow"];
+  const capitalize = (text: string) => text[0].toUpperCase() + text.slice(1);
+  /**
+   * Who ended up where?  This assumes z is back where it was at rememberOutputs(), so the robots are
+   * standing on the same three places, maybe in a different order.
+   */
+  function describeShuffle() {
+    const now = fn.outputs(player.w, cast.previous);
+    /** where[i] is the robot whose starting place robot i is standing on now. */
+    const where = now.map((w) => {
+      let best = 0;
+      shuffleStart.forEach((start, j) => {
+        if (abs(sub(w, start)) < abs(sub(w, shuffleStart[best]))) {
+          best = j;
+        }
+      });
+      return best;
+    });
+    const moved = where.flatMap((j, i) => (j == i ? [] : [i]));
+    const z =
+      where[0] == 0
+        ? "Red, z's own value, came back, so z is on the same sheet it started on."
+        : "Red, z's own value, moved, so z is on a different sheet now.";
+    if (moved.length == 0) {
+      return "Every robot came back to its own place.";
+    } else if (moved.length == 2) {
+      const [a, b] = moved.map((i) => ROBOT_NAMES[i]);
+      const stayed = ROBOT_NAMES[[0, 1, 2].find((i) => !moved.includes(i))!];
+      return `${capitalize(a)} and ${b} traded places. ${capitalize(stayed)} came back to its own place. ${z}`;
+    } else {
+      const took = (i: number) => `${ROBOT_NAMES[i]} is where ${ROBOT_NAMES[where[i]]} started`;
+      return `All three moved: ${took(0)}, ${took(1)}, and ${took(2)}. ${z}`;
+    }
+  }
+
+  /**
+   * From the 2D version:  z walks from 0, once around one branch point, and back to 0.
+   * We pick one that trades z's own value, so z changes sheets.
+   */
+  function demoCubicOne() {
+    startCubicDemo();
+    let branch = CUBIC_BRANCH_POINTS[1];
+    autopilot = asDemo(
+      sequence(
+        player,
+        [
+          walkTo(player, ZERO),
+          before(() => {
+            branch = branchThatMovesZ();
+            cubicOverview();
+            clearTrails();
+            rememberOutputs();
+          }, pathStep(player, () => loopAround(branch, 1), LOOP_SPEED)),
+        ],
+        () =>
+          toast(
+            `${describeShuffle()} Each branch point only trades two of the three values. The third one just takes a walk and comes back.`,
+            14000
+          )
+      ),
+      "Around one branch point"
+    );
+  }
+
+  /**
+   * From the 2D version:  once around each branch point, in turn.  Then around each again, in the
+   * opposite order, on slightly bigger loops so the trails don't land on top of each other.
+   */
+  function demoCubicEach() {
+    startCubicDemo();
+    const loops = [
+      ...CUBIC_BRANCH_POINTS.map((b) => loopAround(b, 1)),
+      ...[...CUBIC_BRANCH_POINTS].reverse().map((b) => loopAround(b, 1, 2.3)),
+    ];
+    const steps: Step[] = [];
+    loops.forEach((loop, i) => {
+      if (i > 0) {
+        steps.push(pause(player, 0.6));
+      }
+      steps.push(pathStep(player, () => loop, LOOP_SPEED));
+    });
+    steps[0] = before(() => {
+      cubicOverview();
+      clearTrails();
+      rememberOutputs();
+    }, steps[0]);
+    autopilot = asDemo(
+      sequence(player, [walkTo(player, ZERO), ...steps], () =>
+        toast(
+          `${describeShuffle()} Each loop traded two values. The last three loops undid the first three, in the opposite order.`,
+          14000
+        )
+      ),
+      "Around each one, in turn"
+    );
+  }
+
+  /**
+   * From the 2D version:  one loop that goes around two branch points at once, 3ω and 3ω².  That's two
+   * trades in a row, so all three values move.
+   */
+  function demoCubicTwo() {
+    startCubicDemo();
+    // An ellipse through 0, around the two branch points on the left.
+    const path = (u: number) => {
+      const theta = TAU * u;
+      return complex(-1.5 + 1.5 * Math.cos(theta), 4 * Math.sin(theta));
+    };
+    autopilot = asDemo(
+      sequence(
+        player,
+        [
+          walkTo(player, ZERO),
+          before(() => {
+            cubicOverview();
+            clearTrails();
+            rememberOutputs();
+          }, pathStep(player, () => path, LOOP_SPEED)),
+        ],
+        () =>
+          toast(
+            `${describeShuffle()} Going around two branch points at once is two trades in a row, so nobody gets to stay home. Go around twice more and everyone's back.`,
+            14000
+          )
+      ),
+      "Around two at once"
+    );
+  }
+
+  /**
+   * Around one branch point, then another, then back around the first one the other way, then back
+   * around the second one the other way.  Every lap is undone, but the values still end up shuffled:
+   * the order matters.
+   */
+  function demoCubicThereAndBack() {
+    startCubicDemo();
+    const [a, b] = CUBIC_BRANCH_POINTS;
+    const loops = [loopAround(a, 1), loopAround(b, 1), loopAround(a, -1, 2.3), loopAround(b, -1, 2.3)];
+    const steps: Step[] = [];
+    loops.forEach((loop, i) => {
+      if (i > 0) {
+        steps.push(pause(player, 0.6));
+      }
+      steps.push(pathStep(player, () => loop, LOOP_SPEED));
+    });
+    steps[0] = before(() => {
+      cubicOverview();
+      clearTrails();
+      rememberOutputs();
+    }, steps[0]);
+    autopilot = asDemo(
+      sequence(player, [walkTo(player, ZERO), ...steps], () =>
+        toast(
+          `${describeShuffle()} z went counterclockwise around 3, then around 3ω, then clockwise around 3, then around 3ω. Every lap was undone, but the values didn't go back. The order matters!`,
+          16000
+        )
+      ),
+      "There and back again"
+    );
+  }
+
+  /**
+   * The √ spiral, aimed at one branch point.  Two loops miss it, the second one just barely.  Then two go
+   * around it, the first one just barely.  We pick a branch point that trades z's own value.
+   * Zoomed in a little, so the biggest loop stays clear of the other branch points.
+   */
+  function demoCubicSpiral() {
+    const scale = 8;
+    startCubicDemo(scale);
+    let branch = CUBIC_BRANCH_POINTS[1];
+    /** The spiral's center, on the line from 0 to the branch point. */
+    const center = () => times(branch, 1 - 1.6 / 3);
+    const spiral: Step = {
+      start: () =>
+        spiralAutopilot(
+          player,
+          () => {},
+          false,
+          branch
+        ),
+      // About how long spiralAutopilot takes.
+      plan: (from) => ({ seconds: 36, end: from }),
+    };
+    autopilot = asDemo(
+      sequence(
+        player,
+        [
+          walkTo(player, ZERO),
+          before(() => (branch = branchThatMovesZ()), {
+            start: () => lineTo(player, center(), 10).start(),
+            plan: () => ({ seconds: (1.4 * scale) / 10, end: center() }),
+          }),
+          before(() => {
+            // Look along the line from 0 to the branch point, but 25° off to the side, so the cut
+            // behind the cloud doesn't land on the spiral's landmarks.
+            const look = multiply(normalize(branch), polar(1, -0.45));
+            parkCamera(center(), look, 0.95, 70);
+            clearTrails();
+          }, spiral),
+        ],
+        () =>
+          toast(
+            "The first two loops missed the branch point, so each robot just drew a little loop of its own. The next two went around it, just barely, then with room to spare. Each of those traded z's value with one of the others. Watch z: it faded each time it crossed behind the cloud, onto another sheet.",
+            15000
+          )
+      ),
+      "Spiral past one branch point"
+    );
+  }
+
+  /**
+   * Far from the branch points, the cubic looks like √z:  two of its values are close to ±√z, and the
+   * third one is small, close to −2/z.  A spiral that stays outside all three branch points shows it.
+   */
+  function demoCubicFar() {
+    const scale = 4;
+    startCubicDemo(scale);
+    const r0 = 4.5;
+    const laps = 3;
+    const spacing = 1.8;
+    const startAngle = Math.PI / 3;
+    const path = (u: number) => polar(r0 + spacing * laps * u, startAngle + laps * TAU * u);
+    autopilot = asDemo(
+      sequence(
+        player,
+        [
+          walkTo(player, path(0)),
+          before(() => {
+            cubicOverview(complex(0, 0), CUBIC_VIEW_FROM, 1.1, 115);
+            clearTrails();
+          }, pathStep(player, () => path, 25)),
+        ],
+        () => {
+          const outputs = fn.outputs(player.w, cast.previous);
+          const small = outputs.reduce((best, w, i) => (abs(w) < abs(outputs[best]) ? i : best), 0);
+          const big = [0, 1, 2].filter((i) => i != small).map((i) => ROBOT_NAMES[i]);
+          toast(
+            `From far away, the three branch points look like one, and the cubic looks like √z. ${capitalize(big[0])} and ${big[1]} acted like the two square roots: each lap moved them half way around, so they traded places. ${capitalize(ROBOT_NAMES[small])} stayed small, near −2/z, and went the other way around, once per lap.`,
+            16000
+          );
+        }
+      ),
+      "Spiral around all three"
+    );
+  }
+
+  /** The camera walks around a branch point that trades z's own value, so it changes sheets. */
+  function demoCubicCamera() {
+    startCubicDemo();
+    let center = ZERO;
+    autopilot = asDemo(
+      sequence(
+        player,
+        [
+          walkTo(player, ZERO),
+          before(
+            () => {
+              const branch = branchThatMovesZ();
+              center = times(branch, 2 / 3);
+              // Switching modes cancels the autopilot.
+              const pilot = autopilot;
+              setMode("explore");
+              autopilot = pilot;
+            },
+            {
+              start: () => circleAutopilot(eye, center, abs(sub(eye.z, center)), () => {}),
+              plan: () => ({ seconds: 14, end: ZERO }),
+            }
+          ),
+        ],
+        () =>
+          toast(
+            zLevel() == 0
+              ? "Only the camera moved, and it went around a branch point, so it changed sheets. That put it back on z's sheet: z is solid again."
+              : "Only the camera moved, but it went around a branch point that trades z's value, so now the camera is on a different sheet. z faded, and part of the floor changed colors. The robots don't care: they live on an ordinary plane. Go around again to get back.",
+            13000
+          )
+      ),
+      "Walk the camera around one"
+    );
+  }
+
+  getById("demoCubicOne").addEventListener("click", demoCubicOne);
+  getById("demoCubicEach").addEventListener("click", demoCubicEach);
+  getById("demoCubicTwo").addEventListener("click", demoCubicTwo);
+  getById("demoCubicThereAndBack").addEventListener("click", demoCubicThereAndBack);
+  getById("demoCubicSpiral").addEventListener("click", demoCubicSpiral);
+  getById("demoCubicFar").addEventListener("click", demoCubicFar);
+  getById("demoCubicCamera").addEventListener("click", demoCubicCamera);
+
+  //
   // Keyboard
   //
   /**
@@ -1986,10 +2398,13 @@ async function main() {
     if (!hit) {
       return;
     }
-    const r = Math.hypot(hit.x, hit.z);
     const minimum = BLOCK_RADIUS + 0.3;
-    if (r < minimum) {
-      hit.multiplyScalar(minimum / r);
+    for (const branch of fn.branchPoints) {
+      const center = toWorld(branch);
+      const r = Math.hypot(hit.x - center.x, hit.z - center.z);
+      if (r < minimum && r > 0) {
+        hit.set(center.x + ((hit.x - center.x) * minimum) / r, hit.y, center.z + ((hit.z - center.z) * minimum) / r);
+      }
     }
     clickRing.position.set(hit.x, 0.04, hit.z);
     clickRingAge = 0;
@@ -1999,10 +2414,14 @@ async function main() {
   //
   // Zoom.  This changes the scale of the complex plane, not the camera.
   //
+  /** Zooming out any more than this would put z inside a branch point's zone. */
+  function zoneScale(z: Complex) {
+    return Math.max(...fn.branchPoints.map((b) => BLOCK_RADIUS / abs(sub(z, b))));
+  }
   function minimumScale() {
-    let result = BLOCK_RADIUS / abs(player.z);
+    let result = zoneScale(player.z);
     if (mode == "explore") {
-      result = Math.max(result, BLOCK_RADIUS / abs(eye.z));
+      result = Math.max(result, zoneScale(eye.z));
     }
     return Math.max(result, MIN_SCALE);
   }
@@ -2014,7 +2433,7 @@ async function main() {
       if (factor < 1 && time - lastZoomToast > 3) {
         lastZoomToast = time;
         toast(
-          mode == "explore" && BLOCK_RADIUS / abs(eye.z) >= BLOCK_RADIUS / abs(player.z)
+          mode == "explore" && zoneScale(eye.z) >= zoneScale(player.z)
             ? "Can't zoom out any more: the branch point's zone would swallow the camera."
             : "Can't zoom out any more: the branch point's zone would swallow z."
         );
@@ -2071,9 +2490,11 @@ async function main() {
    * the cloud.  This is the function's value at the camera, on the camera's sheet.
    */
   function cameraValue() {
-    const cameraZ = toMath(camera.position.x, camera.position.z);
-    return fn.continueTo(cameraZ, activeBody().w);
+    const body = activeBody();
+    return fn.continueTo(cameraZ, body.w, body.z);
   }
+  /** Where the camera is, in math coordinates. */
+  let cameraZ = player.z;
   let cameraW = player.w;
   /**
    * z lives on the Riemann surface.  player.w (the red robot) says where:  it's continued along
@@ -2081,7 +2502,7 @@ async function main() {
    * The outputs live on an ordinary plane, so they're always visible.
    */
   function zLevel() {
-    return fn.levels(player.w, fn.continueTo(player.z, cameraW));
+    return fn.levels(player.w, fn.continueTo(player.z, cameraW, cameraZ));
   }
   function zOnCameraSheet() {
     return zLevel() == 0;
@@ -2100,8 +2521,12 @@ async function main() {
       focus.y + Math.sin(cameraRig.pitch) * cameraRig.distance,
       focus.z - Math.cos(yaw) * horizontal
     );
-    // Don't let the camera into the forbidden zone.  Pull it in toward its subject instead.
-    const hit = segmentEntry(focus.x, focus.z, desired.x, desired.z, CAMERA_BLOCK_RADIUS);
+    // Don't let the camera into a forbidden zone.  Pull it in toward its subject instead.
+    let hit = 1;
+    for (const branch of fn.branchPoints) {
+      const c = toWorld(branch);
+      hit = Math.min(hit, segmentEntry(focus.x - c.x, focus.z - c.z, desired.x - c.x, desired.z - c.z, CAMERA_BLOCK_RADIUS));
+    }
     const wanted = hit < 1 ? Math.max(0.04, hit - 0.02) : 1;
     cameraRig.pull = wanted < cameraRig.pull ? wanted : Math.min(wanted, cameraRig.pull + dt * 1.5);
     camera.position.lerpVectors(focus, desired, cameraRig.pull);
@@ -2152,6 +2577,8 @@ async function main() {
     u.uCameraAngle.value = Math.atan2(-camera.position.z, camera.position.x);
     u.uCameraTotal.value = fn.total(cameraW);
     u.uRelAngle.value = fn.relative(focus, cameraW);
+    u.uCameraZ.value.set(cameraZ.re, cameraZ.im);
+    u.uCameraW.value.set(cameraW.re, cameraW.im);
     const wanted = Number(liftSlider.value) * fn.maxLift;
     const lift = u.uLift.value + (wanted - u.uLift.value) * (1 - Math.exp(-dt * 6));
     u.uLift.value = Math.abs(lift - wanted) < 1e-4 ? wanted : lift;
@@ -2216,7 +2643,7 @@ async function main() {
       const count = Math.abs(level) == 1 ? "1 level" : `${Math.abs(level)} levels`;
       where = `z is ${count} ${level > 0 ? "above" : "below"} the camera's`;
     } else {
-      where = "z is on the other sheet";
+      where = fn == CUBIC ? "z is on a different sheet" : "z is on the other sheet";
     }
     if (level != 0 && offSheetSelect.value == "fade") {
       where += ", so it's faded";
@@ -2399,7 +2826,7 @@ async function main() {
 
     // The outputs follow z continuously.  This is analytic continuation, one small step at a time.
     player.w = fn.continueTo(player.z, player.w);
-    const outputs = fn.outputs(player.w);
+    const outputs = fn.outputs(player.w, cast.previous);
 
     // Characters
     toWorld(player.z, 0, zCharacter.root.position);
@@ -2437,7 +2864,9 @@ async function main() {
       clickRing.material.opacity = 1 - clickRingAge / 0.7;
     }
 
+    placeBranchPoints();
     updateCamera(dt);
+    cameraZ = toMath(camera.position.x, camera.position.z);
     cameraW = cameraValue();
     updateFloorShape(dt);
     sheetMix += ((sheetCheckbox.checked ? 1 : 0) - sheetMix) * (1 - Math.exp(-dt * 6));
@@ -2446,7 +2875,7 @@ async function main() {
     const offSheetStyle = offSheetSelect.value;
     // The other sheets are see-through.  They fade in as the 3D floor separates them from this one.
     floor.update(sheetMix, {
-      count: fn == LOGARITHM ? 3 : 1,
+      count: fn == LOGARITHM ? 3 : fn == SQUARE_ROOT ? 1 : 0,
       fill: THREE.MathUtils.clamp(floorUniforms.uLift.value / (0.08 * fn.maxLift), 0, 1),
       // log's levels flatten out and just stack up far from the branch point.  √'s other sheet is
       // a ceiling that you can see all the way out.
@@ -2464,7 +2893,11 @@ async function main() {
     zCharacter.setOpacity(zSheet == 0 || offSheetStyle != "fade" ? 1 : OFF_SHEET_OPACITY);
     zTrail.setOffSheetOpacity(offSheetStyle == "fade" ? OFF_SHEET_TRAIL_OPACITY : 1);
 
-    branchPoint.update(dt, time, floorHeight);
+    for (const b of branchPoints) {
+      if (b.group.visible) {
+        b.update(dt, time, floorHeight);
+      }
+    }
     updateReadout();
     updateDemoStatus();
   }
@@ -2502,6 +2935,13 @@ async function main() {
     { name: "log z: Parking garage (3D)", fn: LOGARITHM, start: demoLogGarage },
     { name: "log z: Walk the camera around it", fn: LOGARITHM, start: demoCamera },
     { name: "log z: Surface tour (3D)", fn: LOGARITHM, start: demoLogTour },
+    { name: "Cubic: Around one branch point", fn: CUBIC, start: demoCubicOne },
+    { name: "Cubic: Around each one, in turn", fn: CUBIC, start: demoCubicEach },
+    { name: "Cubic: Around two at once", fn: CUBIC, start: demoCubicTwo },
+    { name: "Cubic: There and back again", fn: CUBIC, start: demoCubicThereAndBack },
+    { name: "Cubic: Spiral past one branch point", fn: CUBIC, start: demoCubicSpiral },
+    { name: "Cubic: Spiral around all three", fn: CUBIC, start: demoCubicFar },
+    { name: "Cubic: Walk the camera around one", fn: CUBIC, start: demoCubicCamera },
   ];
   getById("openVideoEditor").addEventListener("click", async () => {
     videoEditorOpen = true;
@@ -2584,6 +3024,15 @@ async function main() {
     demoLogGarage,
     useLog: () => setFunction(LOGARITHM),
     useSqrt: () => setFunction(SQUARE_ROOT),
+    useCubic: () => setFunction(CUBIC),
+    demoCubicOne,
+    demoCubicEach,
+    demoCubicTwo,
+    demoCubicThereAndBack,
+    demoCubicSpiral,
+    demoCubicFar,
+    demoCubicCamera,
+    outputs: () => cast.previous,
     zOnCameraSheet,
     zLevel,
     busy: () => autopilot !== undefined,

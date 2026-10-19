@@ -82,7 +82,7 @@ export const MY_RAINBOW = [
  */
 export function makeFloorUniforms() {
   return {
-    /** 0 for √, 1 for log.  See MultiFunction.shaderId. */
+    /** 0 for √, 1 for log, 2 for the cubic.  See MultiFunction.shaderId. */
     uFunction: { value: 0 },
     /** 0 for a flat floor.  Bigger is taller. */
     uLift: { value: 0 },
@@ -92,6 +92,12 @@ export function makeFloorUniforms() {
     uCameraTotal: { value: 0 },
     /** The camera's total angle minus its subject's.  Always between -π and π. */
     uRelAngle: { value: 0 },
+    /** The cubic:  where the camera is, in math coordinates, and its value there.  See cubicGlsl. */
+    uCameraZ: { value: new THREE.Vector2() },
+    uCameraW: { value: new THREE.Vector2() },
+    /** Where the branch points are, in world coordinates (x, z).  The first uBranchCount are used. */
+    uBranches: { value: [new THREE.Vector2(), new THREE.Vector2(), new THREE.Vector2()] },
+    uBranchCount: { value: 1 },
   };
 }
 export type FloorUniforms = ReturnType<typeof makeFloorUniforms>;
@@ -109,7 +115,7 @@ export function cameraRelativeAngle(x: number, worldZ: number) {
 export function floorHeight(x: number, worldZ: number, level = 0) {
   const u = floorUniforms;
   const lift = u.uLift.value;
-  if (lift == 0) {
+  if (lift == 0 || u.uFunction.value == 2) {
     return 0;
   }
   const phi = cameraRelativeAngle(x, worldZ);
@@ -132,6 +138,65 @@ export function floorNormal(x: number, worldZ: number, level = 0, target = new T
   return target.set(-dx, 1, -dz).normalize();
 }
 
+/**
+ * GLSL for the cubic, w³ − zw − 2 = 0.  The same continuation as continueCubic() in functions.ts:  start
+ * at the camera with the camera's value, and walk the straight line to p in steps that are small
+ * compared to the distance to the nearest branch point.  That's the camera's sheet.  The line only
+ * jumps sheets when it passes through a branch point, so the cuts are the rays directly behind the
+ * branch points, hidden by the clouds.
+ */
+const cubicGlsl = /* glsl */ `
+uniform vec2 uCameraZ;
+uniform vec2 uCameraW;
+uniform vec2 uBranches[3];
+uniform float uBranchCount;
+vec2 cmul(vec2 a, vec2 b) {
+  return vec2(a.x * b.x - a.y * b.y, a.x * b.y + a.y * b.x);
+}
+vec2 cdiv(vec2 a, vec2 b) {
+  return vec2(a.x * b.x + a.y * b.y, a.y * b.x - a.x * b.y) / dot(b, b);
+}
+float cubicBranchDistance(vec2 z) {
+  return min(distance(z, vec2(3.0, 0.0)),
+    min(distance(z, vec2(-1.5, 2.598076211)), distance(z, vec2(-1.5, -2.598076211))));
+}
+vec2 cubicNewton(vec2 w, vec2 z) {
+  vec2 w2 = cmul(w, w);
+  return w - cdiv(cmul(w2, w) - cmul(z, w) - vec2(2.0, 0.0), 3.0 * w2 - z);
+}
+/** The value of w at p, in math coordinates, on the camera's sheet. */
+vec2 cubicCameraSheet(vec2 p) {
+  vec2 z = uCameraZ;
+  vec2 w = uCameraW;
+  float span = distance(p, z);
+  vec2 direction = span > 0.0 ? (p - z) / span : vec2(0.0);
+  float travelled = 0.0;
+  // Far away, or right behind a branch point, it might give up early.  That's hidden by the fog or a cloud.
+  for (int i = 0; i < 96; i++) {
+    if (travelled >= span) {
+      break;
+    }
+    travelled = min(span, travelled + max(0.3 * cubicBranchDistance(z), 1e-5));
+    vec2 next = uCameraZ + direction * travelled;
+    // Predict with the slope, dw/dz = w / (3w² − z).  Then correct with Newton's method.
+    w += cdiv(cmul(w, next - z), 3.0 * cmul(w, w) - z);
+    z = next;
+    w = cubicNewton(w, z);
+  }
+  return cubicNewton(cubicNewton(w, z), z);
+}
+/** Distance from worldXZ to the nearest branch point, in world units. */
+float branchDistanceWorld(vec2 worldXZ) {
+  float d = 1e9;
+  for (int i = 0; i < 3; i++) {
+    if (float(i) < uBranchCount) {
+      d = min(d, distance(worldXZ, uBranches[i]));
+    }
+  }
+  return d;
+}
+`;
+
 /** GLSL to match floorHeight() and cameraRelativeAngle().  Uses the uniforms in floorUniforms. */
 export const floorHeightGlsl = /* glsl */ `
 uniform float uFunction;
@@ -149,6 +214,10 @@ float cameraRelativeAngle(vec2 worldXZ) {
 }
 /** phi is measured from the camera's direction.  level 0 is the camera's sheet. */
 float floorHeightAt(float phi, float level) {
+  if (uFunction > 1.5) {
+    // The cubic is flat, for now.
+    return 0.0;
+  }
   if (uFunction < 0.5) {
     // The camera's subject is at the bottom of the valley.
     float subject = -uRelAngle;
@@ -161,6 +230,7 @@ float floorHeightAt(float phi, float level) {
 float floorHeight(vec2 worldXZ) {
   return floorHeightAt(cameraRelativeAngle(worldXZ), 0.0);
 }
+${cubicGlsl}
 `;
 
 export function toWorld(z: Complex, y = 0, target = new THREE.Vector3()) {

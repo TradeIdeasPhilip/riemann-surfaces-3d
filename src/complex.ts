@@ -17,6 +17,27 @@ export function negate(z: Complex): Complex {
   return { re: -z.re, im: -z.im };
 }
 
+export function add(a: Complex, b: Complex): Complex {
+  return { re: a.re + b.re, im: a.im + b.im };
+}
+
+export function subtract(a: Complex, b: Complex): Complex {
+  return { re: a.re - b.re, im: a.im - b.im };
+}
+
+export function multiply(a: Complex, b: Complex): Complex {
+  return { re: a.re * b.re - a.im * b.im, im: a.re * b.im + a.im * b.re };
+}
+
+export function divide(a: Complex, b: Complex): Complex {
+  const d = b.re * b.re + b.im * b.im;
+  return { re: (a.re * b.re + a.im * b.im) / d, im: (a.im * b.re - a.re * b.im) / d };
+}
+
+export function times(a: Complex, k: number): Complex {
+  return { re: a.re * k, im: a.im * k };
+}
+
 /** Treat both numbers as 2d vectors and take the dot product. */
 export function dot(a: Complex, b: Complex) {
   return a.re * b.re + a.im * b.im;

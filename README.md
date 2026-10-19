@@ -39,12 +39,21 @@ npm run dev
   (red), and 2π𝒾 and 4π𝒾 above and below it.  With the 3D floor on, the floor is the spiral ramp, and the
   levels above the camera's are drawn see-through near the branch point.
 
+- **The cubic, w³ − zw − 2 = 0**: the polynomial from the 2D version.  Three sheets, and three branch
+  points, at 3, 3ω, and 3ω².  Going around one of them trades two of the three values.  Going around two
+  at once moves all three.  The floor is colored by the angle of w on the camera's sheet, which is the
+  same rule as √z.  Flat only, for now.
+
 Each function is one object in `src/functions.ts`.  Everything else (the floor, the camera's sheet, which
-things fade) works through that interface, using the "total angle" around the branch point.
+things fade) works through that interface.  √z and log z use the "total angle" around their one branch
+point.  The cubic has no formula for "the right root", so it keeps every value by continuation along
+straight lines, in small steps compared to the distance to the nearest branch point.  The floor and trail
+shaders do the same continuation, from the camera, for every pixel (`cubicGlsl` in `src/world.ts`).
 
 ## How it works
 
-- `src/world.ts` maps math coordinates to world coordinates. The branch point is always at the world origin.
+- `src/world.ts` maps math coordinates to world coordinates. The world origin is always z = 0, which is the
+  branch point for √z and log z.
   Zooming changes only `view.scale`. Characters, the cloud, and the forbidden zone keep a fixed world
   size, so zooming in shrinks the zone in math units.
 - z and the floating camera are blocked at `BLOCK_RADIUS`. The real camera is pulled in toward its

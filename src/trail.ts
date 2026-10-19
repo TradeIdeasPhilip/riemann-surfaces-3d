@@ -48,7 +48,12 @@ void main() {
   if (uFadeOffSheet > 0.5) {
     // Which sheet is this part of the path on?
     float cameraTotal = uCameraTotal + phi;
-    if (uFunction < 0.5) {
+    if (uFunction > 1.5) {
+      // The cubic:  is it the same value of w that the camera's sheet has here?  Two different values
+      // are never this close, even right next to a branch point.
+      vec2 here = vec2(position.x, -position.z);
+      level = distance(lift, cubicCameraSheet(here)) < 1e-3 * (1.0 + length(lift)) ? 0.0 : 1.0;
+    } else if (uFunction < 0.5) {
       // √:  Is it the same square root as the camera's, or the other one?
       level = cos(atan(lift.y, lift.x) - cameraTotal * 0.5) >= 0.0 ? 0.0 : 1.0;
     } else {

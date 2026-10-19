@@ -450,3 +450,8 @@ kbd {
     height: 60vw;
   }
 }
+
+/* label sets display, which would otherwise override the hidden attribute. */
+label[hidden] {
+  display: none;
+}
