@@ -4,6 +4,10 @@
  * Nothing in this file knows about this program.  It should work in any program that
  * draws with its own canvases (three.js, WebGL, 2D, …) and can step its animation forward
  * by a given amount of time.  Copy it as is.
+ *
+ * **Before you copy this:**  read development-notes/preroll-and-catch-up.md.  A negative
+ * preroll freezes the page while it catches up, and we're deciding between forbidding it
+ * and catching up in the background.  Either way, this file will change.
  */
 
 import {
