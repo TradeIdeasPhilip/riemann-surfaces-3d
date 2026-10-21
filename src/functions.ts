@@ -151,7 +151,7 @@ function cubicNewton(w: Complex, z: Complex): Complex {
 /**
  * The other two values, given one of them.  Dividing w³ − zw − 2 by (x − w) leaves x² + wx + 2/w.
  */
-function otherRoots(w: Complex): [Complex, Complex] {
+export function otherRoots(w: Complex): [Complex, Complex] {
   const d = sqrtPrincipal(subtract(multiply(w, w), divide(complex(8, 0), w)));
   const minusHalf = times(w, -0.5);
   return [add(minusHalf, times(d, 0.5)), subtract(minusHalf, times(d, 0.5))];
@@ -214,8 +214,8 @@ export const CUBIC: MultiFunction = {
   label: "w³ − zw − 2 = 0",
   branchPoints: CUBIC_BRANCH_POINTS,
   shaderId: 2,
-  // Flat for now.
-  maxLift: 0,
+  // The space between two sheets, right under the camera's subject.
+  maxLift: 8,
   // Start at z = 0 on the real cube root of 2, and follow the straight line out.
   principal: (z) => continueCubic(z, CUBIC_START, complex(0, 0)),
   continueTo: continueCubic,

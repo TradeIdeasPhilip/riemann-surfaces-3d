@@ -77,6 +77,9 @@ export const MY_RAINBOW = [
  *        half height, at the cut.  That's where the two sheets cross, and it's always hidden behind
  *        the cloud, so everything you can see is embedded in 3D without crossing itself.
  *   log: A spiral ramp, like a parking garage.  Each level is one full turn higher.
+ *   The cubic:  Three sheets, stacked.  The camera's is the floor, and the other two are one and two
+ *        levels up.  Each branch point glues two of them together, so near each one, those two lean
+ *        toward each other and meet behind its cloud, like the two sheets of √.  See cubicGlsl.
  *
  * floorUniforms are shared by every shader that draws on the input's floor, and by floorHeight().
  */
@@ -95,6 +98,18 @@ export function makeFloorUniforms() {
     /** The cubic:  where the camera is, in math coordinates, and its value there.  See cubicGlsl. */
     uCameraZ: { value: new THREE.Vector2() },
     uCameraW: { value: new THREE.Vector2() },
+    /** The cubic:  the value at the camera for the sheet one level up.  Two levels up is −uCameraW − uCameraW1. */
+    uCameraW1: { value: new THREE.Vector2() },
+    /** Where the camera is, in world coordinates (x, z). */
+    uCameraXZ: { value: new THREE.Vector2() },
+    /**
+     * The cubic, for each branch point:  how much it pulls levels 0 and 1 together, and levels 1 and 2.
+     * 1 if it glues those two levels, 0 if it doesn't, and in between while it fades.  See cubicHeight.
+     */
+    uPinch01: { value: [0, 0, 0] },
+    uPinch12: { value: [0, 0, 0] },
+    /** The cubic:  the angle of the camera's subject around each branch point, measured from the camera. */
+    uSubjectPhi: { value: [0, 0, 0] },
     /** Where the branch points are, in world coordinates (x, z).  The first uBranchCount are used. */
     uBranches: { value: [new THREE.Vector2(), new THREE.Vector2(), new THREE.Vector2()] },
     uBranchCount: { value: 1 },
@@ -115,8 +130,11 @@ export function cameraRelativeAngle(x: number, worldZ: number) {
 export function floorHeight(x: number, worldZ: number, level = 0) {
   const u = floorUniforms;
   const lift = u.uLift.value;
-  if (lift == 0 || u.uFunction.value == 2) {
+  if (lift == 0) {
     return 0;
+  }
+  if (u.uFunction.value == 2) {
+    return cubicHeight(x, worldZ, level);
   }
   const phi = cameraRelativeAngle(x, worldZ);
   if (u.uFunction.value == 0) {
@@ -128,6 +146,65 @@ export function floorHeight(x: number, worldZ: number, level = 0) {
   } else {
     return lift * (phi + u.uRelAngle.value + 2 * Math.PI * level);
   }
+}
+
+/**
+ * How wide the crease behind each of the cubic's branch points is, in world units.  Far from the branch
+ * points, the three sheets are flat and stay apart, except in a strip about this wide behind each cloud.
+ */
+export const CUBIC_CREASE_WIDTH = 9;
+
+/**
+ * The cubic:  how far branch point i has pulled its two sheets together at this point.  0 under the
+ * camera's subject, rising to 1 on the cut directly behind the branch point, like the valley of √.
+ * Unlike √, it fades away from the line through the camera and the branch point, so far away it's
+ * only a crease.  It's still exactly 1 everywhere on the cut.  This matches cubicRise() in cubicGlsl.
+ */
+function cubicRise(x: number, worldZ: number, i: number) {
+  const u = floorUniforms;
+  const b = u.uBranches.value[i];
+  const c = u.uCameraXZ.value;
+  const phi = angleAround(b.x, b.y, c.x, c.y, x, worldZ);
+  const subject = u.uSubjectPhi.value[i];
+  const s = phi >= subject ? (phi - subject) / (Math.PI - subject) : (subject - phi) / (Math.PI + subject);
+  // Distance from the line through the camera and the branch point.
+  const lineX = b.x - c.x;
+  const lineZ = b.y - c.y;
+  const away = Math.abs(lineX * (worldZ - c.y) - lineZ * (x - c.x)) / Math.hypot(lineX, lineZ) / CUBIC_CREASE_WIDTH;
+  return s * s * Math.exp(-away * away);
+}
+
+/**
+ * The angle at (bx, bz), from the direction of (cx, cz) to the direction of (x, z).  -π to π.
+ * All in world coordinates.  This matches angleAround() in cubicGlsl.
+ */
+export function angleAround(bx: number, bz: number, cx: number, cz: number, x: number, z: number) {
+  const ax = cx - bx;
+  const az = cz - bz;
+  const px = x - bx;
+  const pz = z - bz;
+  return Math.atan2(ax * pz - az * px, ax * px + az * pz);
+}
+
+/**
+ * The cubic's 3D floor.  Level 0 (the camera's sheet) starts at 0, level 1 is always at uLift, and level
+ * 2 starts at twice that.  gap01 and gap12 are the spaces between them, as a fraction of uLift.
+ * Each branch point closes the gaps between the sheets it glues, all the way to 0 on its cut.  Gluing
+ * levels 0 and 2 closes both gaps, so level 1 goes through that crossing too.  Multiplying the
+ * factors means each cut closes its gaps exactly, wherever it is, no matter what the others are doing.
+ * This matches cubicHeight() in cubicGlsl.
+ */
+function cubicHeight(x: number, worldZ: number, level: number) {
+  const u = floorUniforms;
+  let gap01 = 1;
+  let gap12 = 1;
+  for (let i = 0; i < 3; i++) {
+    const rise = cubicRise(x, worldZ, i);
+    gap01 *= 1 - u.uPinch01.value[i] * rise;
+    gap12 *= 1 - u.uPinch12.value[i] * rise;
+  }
+  const lift = u.uLift.value;
+  return level == 0 ? lift * (1 - gap01) : level == 1 ? lift : lift * (1 + gap12);
 }
 
 /** The floor's surface normal, for tilting shadows. */
@@ -148,8 +225,13 @@ export function floorNormal(x: number, worldZ: number, level = 0, target = new T
 const cubicGlsl = /* glsl */ `
 uniform vec2 uCameraZ;
 uniform vec2 uCameraW;
+uniform vec2 uCameraW1;
+uniform vec2 uCameraXZ;
 uniform vec2 uBranches[3];
 uniform float uBranchCount;
+uniform float uPinch01[3];
+uniform float uPinch12[3];
+uniform float uSubjectPhi[3];
 vec2 cmul(vec2 a, vec2 b) {
   return vec2(a.x * b.x - a.y * b.y, a.x * b.y + a.y * b.x);
 }
@@ -185,6 +267,70 @@ vec2 cubicCameraSheet(vec2 p) {
   }
   return cubicNewton(cubicNewton(w, z), z);
 }
+/**
+ * The values on levels 0 and 1 at p, continued from the camera together, in the same steps.
+ * Level 2 is −w0 − w1:  the three values always add up to 0.
+ */
+void cubicSheets(vec2 p, out vec2 w0, out vec2 w1) {
+  vec2 z = uCameraZ;
+  w0 = uCameraW;
+  w1 = uCameraW1;
+  float span = distance(p, z);
+  vec2 direction = span > 0.0 ? (p - z) / span : vec2(0.0);
+  float travelled = 0.0;
+  for (int i = 0; i < 96; i++) {
+    if (travelled >= span) {
+      break;
+    }
+    travelled = min(span, travelled + max(0.3 * cubicBranchDistance(z), 1e-5));
+    vec2 next = uCameraZ + direction * travelled;
+    w0 += cdiv(cmul(w0, next - z), 3.0 * cmul(w0, w0) - z);
+    w1 += cdiv(cmul(w1, next - z), 3.0 * cmul(w1, w1) - z);
+    z = next;
+    w0 = cubicNewton(w0, z);
+    w1 = cubicNewton(w1, z);
+  }
+  w0 = cubicNewton(cubicNewton(w0, z), z);
+  w1 = cubicNewton(cubicNewton(w1, z), z);
+}
+/** The value on this level at p.  See cubicSheets(). */
+vec2 cubicLevelValue(vec2 p, float level) {
+  if (level < 0.5) {
+    return cubicCameraSheet(p);
+  }
+  vec2 w0;
+  vec2 w1;
+  cubicSheets(p, w0, w1);
+  return level < 1.5 ? w1 : -w0 - w1;
+}
+/** See angleAround() in world.ts. */
+float angleAround(vec2 b, vec2 c, vec2 p) {
+  vec2 a = c - b;
+  vec2 q = p - b;
+  return atan(a.x * q.y - a.y * q.x, a.x * q.x + a.y * q.y);
+}
+/** See cubicRise() in world.ts. */
+float cubicRise(vec2 worldXZ, int i) {
+  vec2 b = uBranches[i];
+  float phi = angleAround(b, uCameraXZ, worldXZ);
+  float subject = uSubjectPhi[i];
+  float s = phi >= subject ? (phi - subject) / (F_PI - subject) : (subject - phi) / (F_PI + subject);
+  vec2 line = b - uCameraXZ;
+  vec2 q = worldXZ - uCameraXZ;
+  float away = abs(line.x * q.y - line.y * q.x) / length(line) / ${CUBIC_CREASE_WIDTH.toFixed(1)};
+  return s * s * exp(-away * away);
+}
+/** See cubicHeight() in world.ts. */
+float cubicHeight(vec2 worldXZ, float level) {
+  float gap01 = 1.0;
+  float gap12 = 1.0;
+  for (int i = 0; i < 3; i++) {
+    float rise = cubicRise(worldXZ, i);
+    gap01 *= 1.0 - uPinch01[i] * rise;
+    gap12 *= 1.0 - uPinch12[i] * rise;
+  }
+  return level < 0.5 ? uLift * (1.0 - gap01) : level < 1.5 ? uLift : uLift * (1.0 + gap12);
+}
 /** Distance from worldXZ to the nearest branch point, in world units. */
 float branchDistanceWorld(vec2 worldXZ) {
   float d = 1e9;
@@ -212,12 +358,12 @@ float wrapAngle(float a) {
 float cameraRelativeAngle(vec2 worldXZ) {
   return wrapAngle(atan(-worldXZ.y, worldXZ.x) - uCameraAngle);
 }
-/** phi is measured from the camera's direction.  level 0 is the camera's sheet. */
+${cubicGlsl}
+/**
+ * phi is measured from the camera's direction, around the branch point at the origin.  level 0 is the
+ * camera's sheet.  √ and log only.  See floorHeightAtXZ().
+ */
 float floorHeightAt(float phi, float level) {
-  if (uFunction > 1.5) {
-    // The cubic is flat, for now.
-    return 0.0;
-  }
   if (uFunction < 0.5) {
     // The camera's subject is at the bottom of the valley.
     float subject = -uRelAngle;
@@ -227,10 +373,16 @@ float floorHeightAt(float phi, float level) {
   }
   return uLift * (phi + uRelAngle + F_TAU * level);
 }
-float floorHeight(vec2 worldXZ) {
-  return floorHeightAt(cameraRelativeAngle(worldXZ), 0.0);
+/** The height of this level at this point, for any function.  phi is cameraRelativeAngle(worldXZ). */
+float floorHeightAtXZ(vec2 worldXZ, float phi, float level) {
+  if (uLift == 0.0) {
+    return 0.0;
+  }
+  return uFunction > 1.5 ? cubicHeight(worldXZ, level) : floorHeightAt(phi, level);
 }
-${cubicGlsl}
+float floorHeight(vec2 worldXZ) {
+  return floorHeightAtXZ(worldXZ, cameraRelativeAngle(worldXZ), 0.0);
+}
 `;
 
 export function toWorld(z: Complex, y = 0, target = new THREE.Vector3()) {

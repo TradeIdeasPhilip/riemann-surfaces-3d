@@ -21,14 +21,17 @@ import {
   CUBIC_BRANCH_POINTS,
   cubicValuesAt,
   LOGARITHM,
+  otherRoots,
   SQUARE_ROOT,
   type MultiFunction,
 } from "./functions";
 import { lineTimes, MOMENTS } from "./narration";
 import { OFF_SHEET_OPACITY, OFF_SHEET_TRAIL_OPACITY, Trail } from "./trail";
 import {
+  angleAround,
   BLOCK_RADIUS,
   CAMERA_BLOCK_RADIUS,
+  CLOUD_RADIUS,
   floorHeight,
   floorNormal,
   floorUniforms,
@@ -369,13 +372,13 @@ async function main() {
     // Start over on the principal sheet.  The camera is on z's sheet now, since it follows z.
     player.w = fn.principal(player.z);
     cameraW = player.w;
+    cameraOthers = [];
     cast.previous = fn.outputs(player.w);
     snapOutputView = true;
     clearTrails();
     functionButtons.forEach((button, f) => button.classList.toggle("active", f == fn));
     demoLists.forEach((list, f) => (list.hidden = f != fn));
     title.textContent = `${fn.label} Walkabout`;
-    // The cubic doesn't have a 3D floor yet.
     liftSlider.disabled = fn.maxLift == 0;
     if (fn == CUBIC) {
       // The floor's colors are the best way to see the cubic's sheets.
@@ -1945,10 +1948,14 @@ async function main() {
    * straight line to b, and see if z's value is one of the two that meet there.
    */
   function movesOwnValue(body: Body, b: Complex) {
-    const near = add(b, times(normalize(sub(body.z, b)), 0.01));
-    const w = fn.continueTo(near, body.w, body.z);
+    return movesValue(body.z, body.w, b);
+  }
+  /** Does going around branch point b, from z, trade the value w?  See movesOwnValue(). */
+  function movesValue(z: Complex, w: Complex, b: Complex) {
+    const near = add(b, times(normalize(sub(z, b)), 0.01));
+    const there = CUBIC.continueTo(near, w, z);
     const { double, single } = cubicValuesAt(b);
-    return abs(sub(w, double)) < abs(sub(w, single));
+    return abs(sub(there, double)) < abs(sub(there, single));
   }
   /** Pick a branch point that trades z's own value, so z changes sheets, and you can see it fade. */
   function branchThatMovesZ() {
@@ -2260,6 +2267,189 @@ async function main() {
     );
   }
 
+
+  /**
+   * Join paths end to end into one, with u spread evenly by length.  Each piece should start where the
+   * last one ended.
+   */
+  function joinPaths(pieces: ((u: number) => Complex)[]) {
+    const lengths = pieces.map((piece) => pathLength(piece, 1));
+    const total = lengths.reduce((a, b) => a + b);
+    return (u: number) => {
+      let distance = THREE.MathUtils.clamp(u, 0, 1) * total;
+      for (let i = 0; i < pieces.length; i++) {
+        if (distance <= lengths[i] || i == pieces.length - 1) {
+          return pieces[i](Math.min(1, distance / lengths[i]));
+        }
+        distance -= lengths[i];
+      }
+      return pieces[pieces.length - 1](1);
+    };
+  }
+
+  /**
+   * A tour of the cubic's whole surface, with the same four parts as the other tours.
+   *   1. The floor rises into 3D:  three sheets, stacked.
+   *   2. z walks a spiral out from the branch point at 3, crosses a short bridge, and walks a spiral in
+   *      to the one at 3ω.  Each lap around a branch point that glues z's sheet to another takes z to
+   *      that other sheet.  We pick z's starting sheet so the trail lands on all three.
+   *   3. The camera walks once around a branch point that glues its own sheet to another, so those two
+   *      sheets trade places.
+   *   4. The camera settles between two layers, then turns to look along them.
+   */
+  function demoCubicTour() {
+    const scale = START_SCALE;
+    const [a, b] = CUBIC_BRANCH_POINTS;
+    const smooth = THREE.MathUtils.smootherstep;
+    const inner = TOUR_INNER / scale;
+    const spacing = 2.4 / scale;
+    const laps = 3;
+    const outer = inner + laps * spacing;
+    const along = normalize(sub(b, a));
+    const toward = arg(along);
+    const path = joinPaths([
+      // Counterclockwise and out, around a.  It starts and ends on the side facing b.
+      (t) => add(a, polar(inner + spacing * laps * t, toward + laps * TAU * (t - 1))),
+      // The bridge.
+      (t) => add(add(a, times(along, outer)), times(along, (abs(sub(b, a)) - 2 * outer) * t)),
+      // Clockwise and in, around b, starting on the side facing a.  The two spirals make an S.
+      (t) => add(b, polar(outer - spacing * laps * t, toward + Math.PI - laps * TAU * t)),
+    ]);
+    const speed = 15;
+    const lift = 0.6;
+    // Which of the three values should z start with?  One that a trades, and that b trades after the
+    // first spiral, so the trail visits all three sheets.  Follow each one along the path to find out.
+    const start = path(0);
+    const first = CUBIC.principal(start);
+    const candidates = [first, ...otherRoots(first)];
+    const bridgeEnd = path(0.5);
+    const startW =
+      candidates.find((w) => {
+        if (!movesValue(start, w, a)) {
+          return false;
+        }
+        let here = start;
+        let value = w;
+        for (let i = 1; i <= 2000; i++) {
+          const next = path((0.5 * i) / 2000);
+          value = CUBIC.continueTo(next, value, here);
+          here = next;
+        }
+        return movesValue(bridgeEnd, value, b);
+      }) ?? first;
+    // Watch from outside the triangle of branch points, beyond the edge from a to b, looking in.
+    const middle = times(add(a, b), 0.5);
+    const out = normalize(middle);
+    const high = { pitch: 0.42, distance: 50 };
+    const low = { pitch: 0.26, distance: 46 };
+    const orbit = { pitch: 0.38, distance: 17 };
+    const between = { pitch: 0.03, distance: 11 };
+    const orbitDirection = 1;
+    const lookIn = (orbitDirection * Math.PI) / 2;
+    let orbitCenter = a;
+
+    const setup = () => {
+      setMode("walk");
+      view.scale = targetScale = scale;
+      clearTrails();
+      sheetCheckbox.checked = true;
+      // The tour is all about where z and its trail are in 3D, so keep them solid on every sheet.
+      offSheetSelect.value = "solid";
+      liftSlider.value = "0";
+      floorUniforms.uLift.value = 0;
+      player.z = start;
+      player.w = startW;
+      const direction = sub(path(0.001), path(0));
+      player.heading = headingToward(direction.re, -direction.im);
+      cast.previous = fn.outputs(player.w);
+      snapOutputView = true;
+      parkCamera(add(middle, times(out, 0.4)), negate(out), high.pitch, high.distance);
+    };
+
+    /** Does going around b from the camera trade the camera's own value?  Then the floor changes sheets. */
+    const gluesCameraSheet = (branch: Complex) => movesValue(cameraZ, cameraW, branch);
+    const walkToOrbit: Step = {
+      start() {
+        // The nearest of the two that glues the camera's sheet to another.  Usually one of them does.
+        orbitCenter =
+          [a, b]
+            .filter(gluesCameraSheet)
+            .sort((p, q) => abs(sub(eye.z, p)) - abs(sub(eye.z, q)))[0] ??
+          CUBIC_BRANCH_POINTS.find(gluesCameraSheet) ??
+          a;
+        const from = eye.z;
+        const to = add(orbitCenter, times(normalize(sub(eye.z, orbitCenter)), inner));
+        return pathAutopilot(eye, (u) => add(from, times(sub(to, from), easeEnds(u))), 8);
+      },
+      plan: (from) => ({ seconds: (abs(sub(a, from)) * scale) / 8, end: a }),
+    };
+    const walkAround: Step = {
+      start() {
+        const offset = sub(eye.z, orbitCenter);
+        const r = abs(offset);
+        const startAngle = arg(offset);
+        // Face along the circle, without moving the camera.
+        const tangent = headingToward(
+          -orbitDirection * Math.sin(startAngle),
+          -orbitDirection * Math.cos(startAngle)
+        );
+        cameraRig.yawOffset = wrapAngle(cameraRig.yawOffset + eye.heading - tangent);
+        eye.heading = tangent;
+        return pathAutopilot(
+          eye,
+          (u) => add(orbitCenter, polar(r, startAngle + orbitDirection * TAU * u)),
+          (TAU * r * view.scale) / TOUR_ORBIT_SECONDS
+        );
+      },
+      plan: (from) => ({ seconds: TOUR_ORBIT_SECONDS, end: from }),
+    };
+
+    autopilot = asDemo(
+      sequence(
+        player,
+        [
+          // 1. The floor rises.
+          before(
+            setup,
+            pause(player, TOUR_RISE_SECONDS, (t) => (liftSlider.value = String(lift * smooth(t, 0, 0.5))))
+          ),
+          // 2. z walks.  The camera drifts from the higher angle to the lower one, then keeps swaying.
+          withCamera(pathStep(player, () => path, speed), (t) => ({
+            pitch:
+              high.pitch +
+              (low.pitch - high.pitch) * smooth(t, 0, 2) +
+              (0.1 * (1 - Math.cos((Math.max(0, t - 2) * TAU) / 14))) / 2,
+            distance: high.distance + (low.distance - high.distance) * smooth(t, 0, 2),
+            yawOffset: 0.3 * Math.sin((t * TAU) / 20),
+          })),
+          // 3. The camera moves in close to a branch point, and walks around it, looking in.
+          withCamera(walkToOrbit, (t) => ({
+            pitch: low.pitch + (orbit.pitch - low.pitch) * smooth(t, 0, 3),
+            distance: low.distance + (orbit.distance - low.distance) * smooth(t, 0, 3),
+            yawOffset: 0,
+          })),
+          withCamera(walkAround, () => ({ ...orbit, yawOffset: lookIn })),
+          // 4. Down between two layers, looking at where they meet behind the cloud.  Then turn to look
+          // along them.
+          withCamera(pause(eye, TOUR_END_SECONDS), (t) => {
+            const down = smooth(t, 0, 3);
+            return {
+              pitch: orbit.pitch + (between.pitch - orbit.pitch) * down,
+              distance: orbit.distance + (between.distance - orbit.distance) * down,
+              yawOffset: lookIn - 1.2 * smooth(t, 4, TOUR_END_SECONDS),
+            };
+          }),
+        ],
+        () =>
+          toast(
+            "That's the whole surface for the cubic: three sheets. Each branch point glues two of them together, crossing behind its cloud. z's spirals went around two different branch points, so its trail landed on all three sheets. Then the camera walked around a branch point, so its own sheet traded places with another. Drag to look around.",
+            16000
+          )
+      ),
+      "Surface tour (3D)"
+    );
+  }
+
   getById("demoCubicOne").addEventListener("click", demoCubicOne);
   getById("demoCubicEach").addEventListener("click", demoCubicEach);
   getById("demoCubicTwo").addEventListener("click", demoCubicTwo);
@@ -2267,6 +2457,7 @@ async function main() {
   getById("demoCubicSpiral").addEventListener("click", demoCubicSpiral);
   getById("demoCubicFar").addEventListener("click", demoCubicFar);
   getById("demoCubicCamera").addEventListener("click", demoCubicCamera);
+  getById("demoCubicTour").addEventListener("click", demoCubicTour);
 
   //
   // Keyboard
@@ -2502,7 +2693,100 @@ async function main() {
    * The outputs live on an ordinary plane, so they're always visible.
    */
   function zLevel() {
+    if (fn == CUBIC) {
+      return cubicLevel(player.z, player.w);
+    }
     return fn.levels(player.w, fn.continueTo(player.z, cameraW, cameraZ));
+  }
+
+  //
+  // The cubic's levels.  The camera's sheet is level 0, the floor.  The other two sheets are levels 1
+  // and 2, stacked above it.  Which is which is decided by the values at the camera, followed
+  // continuously from frame to frame, so the levels never jump while you watch.
+  //
+
+  /** The cubic's values at the camera for levels 1 and 2.  Level 0 is cameraW. */
+  let cameraOthers: Complex[] = [];
+  /** Where the camera was when cameraOthers was last updated. */
+  let lastCameraZ = cameraZ;
+  function trackCameraLevels() {
+    let [a, b] = otherRoots(cameraW);
+    if (cameraOthers.length == 2) {
+      // The camera can jump, like when it gets pulled in to stay out of a cloud, so follow last frame's
+      // values along the way.  Then keep each level on the value closest to its own.
+      const [x, y] = cameraOthers.map((w) => fn.continueTo(cameraZ, w, lastCameraZ));
+      const d = (p: Complex, q: Complex) => abs(sub(p, q));
+      if (d(a, x) + d(b, y) > d(b, x) + d(a, y)) {
+        [a, b] = [b, a];
+      }
+    } else if (wrapAngle(arg(a) - arg(cameraW)) < wrapAngle(arg(b) - arg(cameraW))) {
+      // A fresh start:  any order works.  This one is the same every time.
+      [a, b] = [b, a];
+    }
+    cameraOthers = [a, b];
+    lastCameraZ = cameraZ;
+  }
+  /** Which level is this value of the cubic on, at z?  0, 1, or 2. */
+  function cubicLevel(z: Complex, w: Complex) {
+    const levels = [cameraW, ...cameraOthers].map((value) => fn.continueTo(z, value, cameraZ));
+    let best = 0;
+    levels.forEach((value, i) => {
+      if (abs(sub(value, w)) < abs(sub(levels[best], w))) {
+        best = i;
+      }
+    });
+    return best;
+  }
+  /**
+   * Tell the cubic's 3D floor which levels each branch point glues together, as seen from the camera,
+   * and where the camera's subject is.  See cubicHeight() in world.ts.
+   * snap skips the easing, for a fresh start.
+   */
+  function updateCubicLevels(dt: number, snap: boolean) {
+    const u = floorUniforms;
+    const levels = [cameraW, ...cameraOthers];
+    const cameraX = camera.position.x;
+    const cameraZWorld = camera.position.z;
+    const subject = toWorld(activeBody().z);
+    const places = CUBIC_BRANCH_POINTS.map((b) => toWorld(b));
+    CUBIC_BRANCH_POINTS.forEach((b, i) => {
+      // Follow each level's value along the straight line to the branch point.  Two of them meet there.
+      const toward = sub(cameraZ, b);
+      const near = add(b, times(toward, Math.min(0.01, (0.2 * BLOCK_RADIUS) / view.scale) / abs(toward)));
+      const { double } = cubicValuesAt(b);
+      const meeting = levels
+        .map((w, level) => ({ level, miss: abs(sub(fn.continueTo(near, w, cameraZ), double)) }))
+        .sort((x, y) => x.miss - y.miss)
+        .slice(0, 2)
+        .map(({ level }) => level);
+      const glues = (level: number) => meeting.includes(level);
+      // Which two levels a branch point glues can change, but only at the moment it's directly behind
+      // another cloud, as seen from the camera.  So fade it out while it's behind one.  That way the
+      // floor never jumps.
+      const here = places[i];
+      const distance = Math.hypot(here.x - cameraX, here.z - cameraZWorld);
+      let fade = 1;
+      places.forEach((other, k) => {
+        const otherDistance = Math.hypot(other.x - cameraX, other.z - cameraZWorld);
+        if (k != i && otherDistance < distance) {
+          const separation = Math.abs(angleAround(cameraX, cameraZWorld, here.x, here.z, other.x, other.z));
+          const size = Math.atan(CLOUD_RADIUS / otherDistance);
+          fade = Math.min(fade, THREE.MathUtils.smoothstep(separation, 0.5 * size, 1.5 * size));
+        }
+      });
+      // Ease toward the new values.  When the camera moves smoothly, the fade above already does the
+      // work, and this barely lags.  But the camera can jump, like when it snaps in to stay out of a
+      // cloud, and then this turns what would be a jump into a quick change of shape.
+      const k = snap ? 1 : 1 - Math.exp(-dt * 12);
+      const target01 = glues(0) && (glues(1) || glues(2)) ? fade : 0;
+      const target12 = glues(2) && (glues(1) || glues(0)) ? fade : 0;
+      u.uPinch01.value[i] += (target01 - u.uPinch01.value[i]) * k;
+      u.uPinch12.value[i] += (target12 - u.uPinch12.value[i]) * k;
+      // The camera's subject stands at the bottom of each valley.
+      const phi = angleAround(here.x, here.z, cameraX, cameraZWorld, subject.x, subject.z);
+      u.uSubjectPhi.value[i] = THREE.MathUtils.clamp(phi, -Math.PI + 0.3, Math.PI - 0.3);
+    });
+    u.uCameraW1.value.set(cameraOthers[0].re, cameraOthers[0].im);
   }
   function zOnCameraSheet() {
     return zLevel() == 0;
@@ -2579,6 +2863,7 @@ async function main() {
     u.uRelAngle.value = fn.relative(focus, cameraW);
     u.uCameraZ.value.set(cameraZ.re, cameraZ.im);
     u.uCameraW.value.set(cameraW.re, cameraW.im);
+    u.uCameraXZ.value.set(camera.position.x, camera.position.z);
     const wanted = Number(liftSlider.value) * fn.maxLift;
     const lift = u.uLift.value + (wanted - u.uLift.value) * (1 - Math.exp(-dt * 6));
     u.uLift.value = Math.abs(lift - wanted) < 1e-4 ? wanted : lift;
@@ -2642,8 +2927,10 @@ async function main() {
     } else if (fn == LOGARITHM) {
       const count = Math.abs(level) == 1 ? "1 level" : `${Math.abs(level)} levels`;
       where = `z is ${count} ${level > 0 ? "above" : "below"} the camera's`;
+    } else if (fn == CUBIC) {
+      where = `z is on a different sheet, ${level == 1 ? "one level" : "two levels"} up from the camera's`;
     } else {
-      where = fn == CUBIC ? "z is on a different sheet" : "z is on the other sheet";
+      where = "z is on the other sheet";
     }
     if (level != 0 && offSheetSelect.value == "fade") {
       where += ", so it's faded";
@@ -2868,20 +3155,25 @@ async function main() {
     updateCamera(dt);
     cameraZ = toMath(camera.position.x, camera.position.z);
     cameraW = cameraValue();
+    if (fn == CUBIC) {
+      const fresh = cameraOthers.length == 0;
+      trackCameraLevels();
+      updateCubicLevels(dt, fresh);
+    }
     updateFloorShape(dt);
     sheetMix += ((sheetCheckbox.checked ? 1 : 0) - sheetMix) * (1 - Math.exp(-dt * 6));
     // z stands on its own sheet.  With the 3D floor, that might be one of the see-through ones.
-    const zSheet = fn == LOGARITHM ? zLevel() : zOnCameraSheet() ? 0 : 1;
+    const zSheet = zLevel();
     const offSheetStyle = offSheetSelect.value;
     // The other sheets are see-through.  They fade in as the 3D floor separates them from this one.
     floor.update(sheetMix, {
-      count: fn == LOGARITHM ? 3 : fn == SQUARE_ROOT ? 1 : 0,
+      count: fn == LOGARITHM ? 3 : fn == SQUARE_ROOT ? 1 : 2,
       fill: THREE.MathUtils.clamp(floorUniforms.uLift.value / (0.08 * fn.maxLift), 0, 1),
       // log's levels flatten out and just stack up far from the branch point.  √'s other sheet is
-      // a ceiling that you can see all the way out.
-      fade: fn == LOGARITHM ? [16, 36] : [40, 110],
-      // √'s other sheet covers everything, so it's mostly just grid lines.
-      base: fn == LOGARITHM ? 0.16 : 0.07,
+      // a ceiling that you can see all the way out, and so are the cubic's.
+      fade: fn == LOGARITHM ? [16, 36] : fn == SQUARE_ROOT ? [40, 110] : [60, 150],
+      // √'s other sheet covers everything, so it's mostly just grid lines.  The cubic has two of those.
+      base: fn == LOGARITHM ? 0.16 : fn == SQUARE_ROOT ? 0.07 : 0.12,
     });
 
     standOnFloor(zCharacter.root, zCharacter.shadow, zSheet);
@@ -2942,6 +3234,7 @@ async function main() {
     { name: "Cubic: Spiral past one branch point", fn: CUBIC, start: demoCubicSpiral },
     { name: "Cubic: Spiral around all three", fn: CUBIC, start: demoCubicFar },
     { name: "Cubic: Walk the camera around one", fn: CUBIC, start: demoCubicCamera },
+    { name: "Cubic: Surface tour (3D)", fn: CUBIC, start: demoCubicTour },
   ];
   getById("openVideoEditor").addEventListener("click", async () => {
     videoEditorOpen = true;
@@ -3032,7 +3325,15 @@ async function main() {
     demoCubicSpiral,
     demoCubicFar,
     demoCubicCamera,
+    demoCubicTour,
     outputs: () => cast.previous,
+    parkCamera: (target: Complex, look: Complex, pitch: number, distance: number) =>
+      parkCamera(target, look, pitch, distance),
+    cubicPinches: () => ({
+      p01: [...floorUniforms.uPinch01.value],
+      p12: [...floorUniforms.uPinch12.value],
+      subject: [...floorUniforms.uSubjectPhi.value],
+    }),
     zOnCameraSheet,
     zLevel,
     busy: () => autopilot !== undefined,

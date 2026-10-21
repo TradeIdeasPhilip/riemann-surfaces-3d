@@ -26,14 +26,25 @@ const vertexShader = /* glsl */ `
 ${floorHeightGlsl}
 /** 0 is the camera's own level.  1 is the next level up the log spiral, and so on. */
 uniform float uLevel;
+uniform float uScale;
+uniform vec2 uCenter;
+uniform float uSheetMix;
 varying vec3 vWorld;
+/** The cubic's see-through levels:  the value of w here.  The fragment shader polishes it. */
+varying vec2 vW;
 void main() {
   float r = position.x;
   float phi = position.y;
   // Math angle, counterclockwise from Re.
   float angle = uCameraAngle + phi;
-  float height = floorHeightAt(phi, uLevel);
-  vWorld = vec3(r * cos(angle), height, -r * sin(angle));
+  vec2 xz = vec2(r * cos(angle), -r * sin(angle));
+  vWorld = vec3(xz.x, floorHeightAtXZ(xz, phi, uLevel), xz.y);
+  vW = vec2(0.0);
+  if (uFunction > 1.5 && uLevel > 0.5 && uSheetMix > 0.0) {
+    // Following the line from the camera for every pixel of every level is too slow.  The floor gets that,
+    // because it matters most.  The see-through levels only do it at each corner of the mesh.
+    vW = cubicLevelValue(vec2(xz.x, -xz.y) / uScale + uCenter, uLevel);
+  }
   gl_Position = projectionMatrix * viewMatrix * vec4(vWorld, 1.0);
 }
 `;
@@ -61,6 +72,7 @@ uniform vec3 uRainbow[9];
 uniform vec3 uFogColor;
 uniform float uFogDensity;
 varying vec3 vWorld;
+varying vec2 vW;
 
 // Anti-aliased line, about widthPx pixels wide.  Fades out when the cells get too small to see.
 float gridAxis(float q, float fw, float widthPx) {
@@ -92,7 +104,7 @@ void main() {
       // The cubic:  nine wedges by the angle of w itself, on the camera's sheet.  That's the same rule
       // as √z below, where the total angle is twice the angle of w.  The Riemann surface is the w plane,
       // so each color is a wedge of the surface, laid out on the floor.
-      vec2 w = cubicCameraSheet(p);
+      vec2 w = uLevel < 0.5 ? cubicCameraSheet(p) : cubicNewton(cubicNewton(vW, p), p);
       t = atan(w.y, w.x) * 9.0 / F_TAU + 0.5;
       // t jumps by 9 where the angle wraps around.  That's the same color, so ignore the jump.
       vec2 slope = vec2(dFdx(t), dFdy(t));
@@ -150,7 +162,10 @@ void main() {
 }
 `;
 
-/** Levels of the log spiral to draw above the camera's own.  The ones below are hidden by the floor. */
+/**
+ * Levels to draw above the camera's own:  3 for the log spiral (the ones below are hidden by the floor),
+ * 1 for √, 2 for the cubic.
+ */
 const GHOST_LEVELS = 3;
 
 /** How bright the rainbow is on the floor.  Dim enough that the trails and robots stand out. */

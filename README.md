@@ -42,7 +42,9 @@ npm run dev
 - **The cubic, w³ − zw − 2 = 0**: the polynomial from the 2D version.  Three sheets, and three branch
   points, at 3, 3ω, and 3ω².  Going around one of them trades two of the three values.  Going around two
   at once moves all three.  The floor is colored by the angle of w on the camera's sheet, which is the
-  same rule as √z.  Flat only, for now.
+  same rule as √z.  With the 3D floor on, the camera's sheet is the floor and the other two are stacked
+  above it, see-through.  Near each branch point, the two sheets it glues lean toward each other and cross
+  behind its cloud.  Far away they flatten out into three layers, with a crease behind each cloud.
 
 Each function is one object in `src/functions.ts`.  Everything else (the floor, the camera's sheet, which
 things fade) works through that interface.  √z and log z use the "total angle" around their one branch
