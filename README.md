@@ -16,6 +16,20 @@ npm install
 npm run dev
 ```
 
+## History
+
+I first learned about this math in grad school in the late 1990's.
+The professor listed out a bunch of complex numbers and told us *with his words* how to visualize them.
+
+This is at least the third time I've brought his words to life.
+The tech keeps improving!
+Check out my [previous version](https://github.com/TradeIdeasPhilip/riemann-surfaces) for the non-robot, non-3d, pre-AI solution.
+That project includes more history, including a copy of my professor's original presentation.
+
+The 3D Wikipedia image on that page really inspired this project.
+I asked myself, what would it look like if I could walk on that surface?
+And more complicated surfaces, like the cubic with its **three** separate branch points.
+
 ## Controls
 
 | | |
