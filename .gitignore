@@ -3,3 +3,5 @@ dist
 tmp
 .DS_Store
 *.local
+# Record mode's takes:  big audio files.  See development-notes/record-mode.md.
+recordings

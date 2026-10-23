@@ -70,7 +70,7 @@ There's no need to record the outputs, since they come from w, or anything purel
 JSON lines, one object per line, so a long take is easy to append to and easy for me to read.
 Every time is in ms from the start of the recording, all from one clock (`performance.now()`).
 The first line says what was running:  the git commit, the function, the starting state, and the window size.
-20 samples a second for 10 minutes is about 12,000 lines, a few MB.
+20 samples a second for 10 minutes is about 12,000 lines.  The first real take came to 9 MB for 16 minutes.
 
 ### Audio, and keeping it in sync
 
@@ -176,15 +176,15 @@ Everything below that line is only about making sure the machinery never adds an
 | 1–10 ms | A key or trackpad press to its event time.  Input devices report on a schedule, often every 1–8 ms. | Estimate |
 | 2.7 ms | One block of Web Audio processing (128 samples).  The audio clock and the volume meter advance in these steps. | Definition |
 | 8.3 ms | One frame at 120 Hz, if the display is a ProMotion one | Definition |
-| 10–20 ms | Mic and OS input buffering, before we see the sound.  Output to the speakers is probably similar. | Measure |
 | **16.7 ms** | **One 60 fps frame:  the edge of what you can perceive.**  A one-frame flash is obvious. | Definition |
-| 20–40 ms | **The round trip:**  the software starts a sound, and the software hears it come back.  It's the output delay, plus the trip through the air, plus the input delay.  The calibration chirps measure it. | Measure |
 | 33.3 ms | One 30 fps frame.  Low-power mode drops to this, and you don't notice unless something flashes. | Definition |
 | tens of ms | How far off `MediaRecorder`'s start can be.  That's why we don't use it. | Estimate |
 | 45 ms | Audio *ahead* of the picture by more than this starts to be noticeable (ITU-R BT.1359, the broadcast lip-sync guideline) | Published |
 | 50 ms | Time between samples in the log, at 20 per second | Our choice |
 | 50–200 ms | How far off speech recognition's word times often are.  Probably our weakest link.  Check against the waveform. | Estimate |
+| **72 ms** | Mic and OS input buffering, before we see the sound:  the round trip minus Chrome's 34 ms output.  I guessed 10–20 ms. | **Measured**, MacBook Air, 2026-10-22 |
 | **100 ms** | **Noticing something.  Your floor.** | Your number |
+| **106 ms** | **The round trip:**  the software starts a sound, and the software hears it come back.  It's the output delay, plus the trip through the air, plus the input delay.  130 ms with noise suppression on.  I guessed 20–40 ms.  The calibration sounds measure it every take, so it never matters. | **Measured**, MacBook Air, 2026-10-22 |
 | 125 ms | Audio *behind* the picture by more than this starts to be noticeable (same guideline).  We're more tolerant of late sound, as with thunder. | Published |
 | 150–250 ms | One spoken syllable | Estimate |
 | 200 ms | The calibration chirp itself | Our choice |
@@ -195,7 +195,7 @@ Everything below that line is only about making sure the machinery never adds an
 
 | Clocks | Typical difference | Over 1 minute | Over a 10-minute take | Kind |
 | --- | ---: | ---: | ---: | --- |
-| Audio clock vs. `performance.now()` | 20–100 parts per million (crystal tolerances) | 1–6 ms | 12–60 ms | Measure |
+| Audio clock vs. `performance.now()` | 3 parts per million.  I guessed 20–100. | 0.2 ms | 2 ms | **Measured**, MacBook Air, 16 minutes |
 | A video file's clock | Exact by definition:  frame *n* is at *n*/60 s | 0 | 0 | Definition |
 | Screen refreshes vs. real time | 0 at a true 60 Hz.  0.1% at 59.94 Hz.  Variable on ProMotion displays, and 30 Hz in low-power mode. | up to 60 ms | up to 600 ms | Measure |
 
@@ -258,7 +258,7 @@ If we do it right, if we customize and perfect it for my needs, it will be bette
 Whatever we create here might get copied into the video editor library and other places.
 Let's try to keep the code and the GUI all in pieces that will be easy to copy, rather than letting it get mixed in the rest of the program.
 
-In fact recording voiceovers might be the last major addition needed before the video editor could be 
+In fact recording voiceovers might be the last major addition needed before the video editor could be considered "feature complete" and able to stand on its own.
 
 Let's explore, let's try things (e.g. let the mac remove the echo vs do it in post processing), let's get this right as it is an important feature that will be used and reused.
 
@@ -273,3 +273,47 @@ And I'll probably be sketching out very rough ideas of what I want, using my voi
 We can use these initial trials to check out the various settings, like echo reduction.
 Eventually we will want to record the highest quality sounds.
 But for now we are free to explore as long as the sound quality is *good enough*.
+
+## Regarding Headphones
+
+There's nothing that I do when I'm recording that would require headphones.
+I'm not having a conversation with anyone.
+My microphone is only recording to disk, not playing on speakers or broadcasting to someone who might play it back.
+
+For the most part my PC speakers are quiet in my recording sessions.
+When there is someone playing on my speakers, it's on purpose, and I want it to be recorded.
+One example, described above, is our new calibration chirp.
+And sometimes in a screen recording I want the audience to hear what I'm hearing.
+In a [recent video](https://youtu.be/inGBzkITHVU?si=9_I1XqaxfT6t2rsd) I was showing off how my video editor's new speech to text has very accurate timestamps.
+In short, I see little to no value to trying to screen out what is coming from the speaker in our application.
+Is this the "echo prevention" check box?
+
+Recommendation:
+Make it as a checkbox.
+Monitor it, as described above, to say if our request took hold.
+Default it to off.
+
+Note:
+When I am purposely recording the speakers, it's usually something quick and simple.
+The entire point is to show off what I'm doing.
+The sound quality is very poor, I think the word is "tinny".
+If I actually wanted the content I'd import the sound file properly in my video editor library.
+
+That *tinny* sound actually works well for what it is.
+When I'm playing the result it becomes 100% clear when I was talking directly into the microphone vs when my voice was being played back and rerecorded.
+It's the audio equivalent of a block quote.
+
+## First version (2026-10-22)
+
+Built:  the panel, the recorder, the calibration sounds (your picks:  rising for Start, falling for Stop, a double sweep for Marker), the log, and the analysis script.
+See [src/recording/README.md](../src/recording/README.md) for how to use it.
+Tested end to end with a fake mic (Chrome can use a WAV file as the mic), but not yet with a real voice.
+
+What the first tests found:
+
+- **Changing the voice processing mid-take works, by reopening the mic.**  Chrome ignores `applyConstraints` for these, so the recorder opens the mic again.  The recording keeps going on the same clock.  The log says which way it happened.
+- **This Chrome offers voice isolation,** so that's a fourth checkbox.
+- **The clocks agree.**  In a short test, the audio clock and the page's clock differed by 16 parts per million.
+- **Transcription works** on the takes, through the library's transcriber, served from `recordings/` by the dev server.  A robot voice saying "Claude" came out as "Glowed", so "Claude, …" might need a word that's harder to mishear.
+
+Not yet:  replay, cuts, finding the key clicks in the audio, and a "last good take" level for the voice marker.

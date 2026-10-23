@@ -3,6 +3,7 @@
     "postroll",
     "preroll",
     "Showable",
-    "voiceovers"
+    "voiceovers",
+    "Worklet"
   ]
 }

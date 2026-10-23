@@ -3237,6 +3237,8 @@ async function main() {
     { name: "Cubic: Surface tour (3D)", fn: CUBIC, start: demoCubicTour },
   ];
   getById("openVideoEditor").addEventListener("click", async () => {
+    // Record mode doesn't work inside the video editor, yet.
+    await recordPanel?.close();
     videoEditorOpen = true;
     keys.clear();
     renderer.setAnimationLoop(null);
@@ -3288,6 +3290,61 @@ async function main() {
       readout: readoutInfo,
       caption: () => autopilot?.caption?.(),
     });
+  });
+
+  //
+  // Record mode.  Records your voice, what you do, and what the app is doing, for planning demos.
+  // Everything but this is in src/recording/.  See development-notes/record-mode.md.
+  //
+  /** What the app is doing, for record mode's log, 20 times a second.  Positions are math coordinates. */
+  function recordingState() {
+    const pair = (c: Complex) => [c.re, c.im];
+    return {
+      function: fn.id,
+      mode,
+      z: pair(player.z),
+      w: pair(player.w),
+      heading: player.heading,
+      zLevel: zLevel(),
+      eye: mode == "explore" ? { z: pair(eye.z), w: pair(eye.w), heading: eye.heading } : undefined,
+      camera: {
+        yaw: cameraRig.yawOffset,
+        pitch: cameraRig.pitch,
+        distance: cameraRig.distance,
+        pull: cameraRig.pull,
+        at: camera.position.toArray(),
+      },
+      scale: view.scale,
+      targetScale,
+      demo: autopilot?.title,
+      remaining: autopilot?.remaining?.(),
+      lift: Number(liftSlider.value),
+      rainbow: sheetCheckbox.checked,
+      offSheet: offSheetSelect.value,
+    };
+  }
+  let recordPanel: { close(): Promise<void> } | undefined;
+  const recordButton = getById<HTMLButtonElement>("recordMode");
+  recordButton.addEventListener("click", async () => {
+    if (recordPanel) {
+      return;
+    }
+    recordButton.disabled = true;
+    try {
+      const { openRecordPanel } = await import("./recording/record-panel");
+      recordPanel = await openRecordPanel({
+        parent: getById("mainView"),
+        sample: recordingState,
+        describe: () => ({ app: "Riemann Walkabout", function: fn.id }),
+        onClose: () => {
+          recordPanel = undefined;
+          recordButton.disabled = false;
+        },
+      });
+    } catch (error) {
+      console.error("Record mode", error);
+      recordButton.disabled = false;
+    }
   });
 
   (window as unknown as { app: unknown }).app = {
