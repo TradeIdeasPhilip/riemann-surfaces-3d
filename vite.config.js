@@ -3,8 +3,17 @@ import { defineConfig, searchForWorkspaceRoot } from "vite";
 export default defineConfig({
   // Relative paths so the build works from GitHub Pages or any subdirectory.
   base: "./",
-  // three.js alone is bigger than the default warning limit.
-  build: { chunkSizeWarningLimit: 1000 },
+  build: {
+    // three.js alone is bigger than the default warning limit.
+    chunkSizeWarningLimit: 1000,
+    rolldownOptions: {
+      output: {
+        // The Visual Editor writes TypeScript that names each component's class (the "Sync diffs"
+        // file, and properties/*.txt).  Without this, minifying turns those names into "hi" and "Nr".
+        keepNames: true,
+      },
+    },
+  },
   server: {
     // Always the same port.  The video editor saves its work in the browser (IndexedDB),
     // and the browser keeps a separate copy for each port.  If Vite moved to a different

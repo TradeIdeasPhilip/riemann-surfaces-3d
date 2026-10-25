@@ -111,6 +111,10 @@ One-time setup: in the GitHub repo, **Settings → Pages → Build and deploymen
 `npm run build` also runs `tsc`, so a type error fails the deploy and the live site keeps the last
 good version.
 
+The build keeps class names (`keepNames` in [vite.config.js](vite.config.js)). The video editor's Visual
+Editor writes TypeScript that names each component's class (Sync diffs, and `properties/*.txt`). In a
+minified production build, like the GitHub Pages copy, those names come out as `hi` and `Nr` without it.
+
 ## Credits
 
 Robot model: "RobotExpressive" by [Tomás Laulhé (Quaternius)](https://quaternius.com/), CC0 1.0,
